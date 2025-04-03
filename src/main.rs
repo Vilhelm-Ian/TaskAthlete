@@ -3,7 +3,7 @@ mod cli;
 mod db;
 
 use chrono::{Utc, Duration};
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use comfy_table::{presets::UTF8_FULL, Cell, Color, ContentArrangement, Table};
 use db::{Workout, ExerciseDefinition }; 
 
@@ -26,6 +26,7 @@ fn main() -> Result<()> {
             let db_type = match type_ {
                 cli::ExerciseTypeCli::Resistance => db::ExerciseType::Resistance,
                 cli::ExerciseTypeCli::Cardio => db::ExerciseType::Cardio,
+                cli::ExerciseTypeCli::BodyWeight => db::ExerciseType::BodyWeight,
             };
 
             match db::create_exercise(&conn, &name, &db_type, muscles.as_deref()) {
@@ -50,6 +51,7 @@ fn main() -> Result<()> {
                     result = match type_ {
                         cli::ExerciseTypeCli::Resistance => db::ExerciseType::Resistance,
                         cli::ExerciseTypeCli::Cardio => db::ExerciseType::Cardio,
+                        cli::ExerciseTypeCli::BodyWeight => db::ExerciseType::BodyWeight,
                     };
                     Some(&result)
                 }
@@ -82,25 +84,51 @@ fn main() -> Result<()> {
             muscles,
             notes,
         } => {
+            // 1. Find the Exercise Definition (by ID or Name)
+            let exercise_def_opt = db::get_exercise_by_identifier(&conn, &exercise)
+                .context("Failed to query exercise definition")?;
+
+            let mut final_exercise_def: Option<ExerciseDefinition> = exercise_def_opt;
+
             // Implicitly create exercise definition if type/muscles are provided and it doesn't exist
             if let (Some(cli_type), Some(muscle_list)) = (&exercise_type, &muscles) {
                 // Check if it exists first
-                if db::get_exercise_by_name(&conn, &exercise)?.is_none() {
+                if final_exercise_def.is_none() {
                     println!("Exercise '{}' not found, defining it implicitly.", exercise);
                     let db_type = match cli_type {
                          cli::ExerciseTypeCli::Resistance => db::ExerciseType::Resistance,
                          cli::ExerciseTypeCli::Cardio => db::ExerciseType::Cardio,
+                         cli::ExerciseTypeCli::BodyWeight => db::ExerciseType::BodyWeight,
                     };
                     match db::create_exercise(&conn, &exercise, &db_type, Some(muscle_list)) {
-                         Ok(id) => println!("Implicitly defined exercise: '{}' (ID: {})", exercise, id),
+                    Ok(id) => {
+                        println!("Implicitly defined exercise: '{}' (ID: {})", exercise, id);
+                        // Re-fetch the newly created definition to get all details
+                        final_exercise_def = db::get_exercise_by_id(&conn, id)
+                           .context("Failed to fetch newly created exercise definition")?;
+                    },
                          Err(e) => eprintln!("Warning: Failed to implicitly define exercise '{}': {}", exercise, e), // Warn but proceed with adding workout
                     }
                 }
-                 // If it exists, we don't update it here, just proceed to add the workout log.
             }
-
-            // Add the workout entry regardless of whether the definition existed or was just create
-            let inserted_id = db::add_workout(&conn, &exercise, sets, reps, weight, duration, notes)
+        
+            // Ensure we have an exercise definition (either found or implicitly created)
+            let exercise_def = match final_exercise_def {
+                Some(def) => def,
+                None => bail!("Exercise '{}' not found and could not be implicitly created (provide --type and --muscles).", exercise),
+            };
+        
+            // 2. Calculate final weight, considering bodyweight
+            let mut final_weight = weight; // Start with weight from CLI args (can be None)
+            if exercise_def.type_ == db::ExerciseType::BodyWeight {
+                let bodyweight = db::get_bodyweight(&conn)
+                    .context("Failed to retrieve bodyweight")?
+                    .ok_or(db::DbError::BodyweightNotSet)?; // Error if bodyweight not set
+                final_weight = Some(bodyweight + weight.unwrap_or(0.0)); // Add CLI weight if provided
+            }
+        
+            // 3. Add the workout entry using the potentially modified weight and definitive exercise name
+            let inserted_id = db::add_workout(&conn, &exercise_def.name, sets, reps, final_weight, duration, notes)
                 .context("Failed to add workout")?;
             println!(
                 "Successfully added workout: '{}' (ID: {})",
@@ -142,6 +170,7 @@ fn main() -> Result<()> {
             let db_type_filter = type_.map(|t| match t {
                 cli::ExerciseTypeCli::Resistance => db::ExerciseType::Resistance,
                 cli::ExerciseTypeCli::Cardio => db::ExerciseType::Cardio,
+                cli::ExerciseTypeCli::BodyWeight => db::ExerciseType::BodyWeight,
             });
 
             let exercises = db::list_exercises(&conn, db_type_filter, muscle.as_deref())
@@ -153,6 +182,7 @@ fn main() -> Result<()> {
             }
         }
         cli::Commands::EditWorkout {
+            // Note: Identifier for EditWorkout should be the workout *ID* for clarity
             identifier,
             exercise,
             sets,
@@ -161,6 +191,7 @@ fn main() -> Result<()> {
             duration,
             notes,
         } => {
+            // TODO: Consider if exercise name change here should also check Bodyweight calc? For now, it just updates fields.
             let rows_affected = db::update_workout(
                 &conn,
                 &identifier,
@@ -182,7 +213,12 @@ fn main() -> Result<()> {
         cli::Commands::DbPath => {
             println!("Database file is located at: {:?}", db_path);
         }
-    }
+        cli::Commands::SetBodyWeight{ weight } => {
+            db::set_bodyweight(&conn, weight)
+                .context("Failed to set bodyweight in database")?;
+            println!("Successfully set bodyweight to: {}", weight);
+        }
+        }
 
     Ok(())
 }
@@ -197,6 +233,7 @@ fn print_workout_table(workouts: Vec<Workout>) {
             Cell::new("ID").fg(Color::Green),
             Cell::new("Timestamp (UTC)").fg(Color::Green),
             Cell::new("Exercise").fg(Color::Green),
+             Cell::new("Type").fg(Color::Green),
             Cell::new("Sets").fg(Color::Green),
             Cell::new("Reps").fg(Color::Green),
             Cell::new("Weight").fg(Color::Green),
@@ -209,6 +246,7 @@ fn print_workout_table(workouts: Vec<Workout>) {
             Cell::new(workout.id.to_string()),
             Cell::new(workout.timestamp.format("%Y-%m-%d %H:%M").to_string()), // Format timestamp
             Cell::new(workout.exercise_name),
+            Cell::new(workout.exercise_type.map_or("-".to_string(), |t| t.to_string())),
             Cell::new(workout.sets.map_or("-".to_string(), |v| v.to_string())),
             Cell::new(workout.reps.map_or("-".to_string(), |v| v.to_string())),
             Cell::new(workout.weight.map_or("-".to_string(), |v| v.to_string())),

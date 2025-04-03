@@ -13,6 +13,7 @@ pub struct Cli {
 pub enum ExerciseTypeCli {
     Resistance,
     Cardio,
+    BodyWeight
 }
 
 #[derive(Subcommand, Debug)]
@@ -124,6 +125,7 @@ pub enum Commands {
     },
     /// Show the path to the database file
     DbPath,
+    SetBodyWeight{ weight: f64}
 }
 
 // Function to parse CLI arguments

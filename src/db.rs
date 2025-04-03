@@ -1,6 +1,6 @@
 // src/db.rs
 use anyhow::{Context, Result};
-use core::fmt;
+use std::fmt;
 use chrono::{DateTime, NaiveDate, Utc };
 use rusqlite::{params, Connection, Row, ToSql};
 use std::path::{Path, PathBuf};
@@ -16,6 +16,7 @@ pub struct Workout {
     pub weight: Option<f64>,
     pub duration_minutes: Option<i64>,
     pub notes: Option<String>,
+    pub exercise_type: Option<ExerciseType>,
 }
 
 // Represents the definition of an exercise type
@@ -32,6 +33,7 @@ pub struct ExerciseDefinition {
 pub enum ExerciseType {
     Resistance,
     Cardio,
+    BodyWeight,
 }
 
 // Convert string from DB to ExerciseType
@@ -42,6 +44,7 @@ impl TryFrom<&str> for ExerciseType {
         match value.to_lowercase().as_str() {
             "resistance" => Ok(ExerciseType::Resistance),
             "cardio" => Ok(ExerciseType::Cardio),
+            "body-weight" => Ok(ExerciseType::BodyWeight),
             _ => anyhow::bail!("Invalid exercise type string: {}", value),
         }
     }
@@ -53,6 +56,7 @@ impl fmt::Display for ExerciseType {
         match self {
             ExerciseType::Resistance => write!(f, "resistance"),
             ExerciseType::Cardio => write!(f, "cardio"),
+            ExerciseType::BodyWeight => write!(f, "body-weight"),
         }
     }
 }
@@ -66,9 +70,14 @@ pub enum DbError {
     DataDir,
     #[error("I/O error")]
     Io(#[from] std::io::Error),
+    #[error("Exercise not found: {0}")]
+    ExerciseNotFound(String),
+    #[error("Bodyweight not set. Use 'set-bodyweight' command.")]
+    BodyweightNotSet,
 }
 
 const DB_FILE_NAME: &str = "workouts.sqlite";
+const BODYWEIGHT_KEY: &str = "user_bodyweight";
 
 /// Gets the path to the SQLite database file.
 /// Creates the directory if it doesn't exist.
@@ -104,12 +113,17 @@ pub fn init_db(conn: &Connection) -> Result<(), DbError> {
     conn.execute(
         "CREATE TABLE IF NOT EXISTS exercises (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL UNIQUE,
-            type TEXT NOT NULL CHECK(type IN ('resistance', 'cardio')), -- Enforce allowed types
+            name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            type TEXT NOT NULL CHECK(type IN ('resistance', 'cardio', 'body-weight')), -- Enforce allowed types
             muscles TEXT -- Comma-separated list or similar
         )",
         [],
     )?; // Create exercises table
+    // Create a settings table for things like bodyweight
+    conn.execute(
+     "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)",
+     [],
+     )?;
     Ok(())
 }
 
@@ -234,32 +248,59 @@ pub fn delete_workout(conn: &Connection, id: i64) -> Result<u64> {
 
 // Helper function to map a database row to a Workout struct
 fn map_row_to_workout(row: &Row) -> Result<Workout, rusqlite::Error> {
+    // Adjust indices based on the SELECT statement used
+    let id: i64 = row.get(0)?;
     let timestamp_str: String = row.get(1)?;
+    let exercise_name: String = row.get(2)?;
+    let sets: Option<i64> = row.get(3)?;
+    let reps: Option<i64> = row.get(4)?;
+    let weight: Option<f64> = row.get(5)?;
+    let duration_minutes: Option<i64> = row.get(6)?;
+    let notes: Option<String> = row.get(7)?;
+    let type_str_opt: Option<String> = row.get(8)?; // Get exercise type string (can be NULL from LEFT JOIN)
+
     let timestamp = DateTime::parse_from_rfc3339(&timestamp_str)
         .map(|dt| dt.with_timezone(&Utc))
         .map_err(|e| rusqlite::Error::FromSqlConversionFailure(
-            1,
-            rusqlite::types::Type::Text,
-            Box::new(e),
+            1, rusqlite::types::Type::Text, Box::new(e),
         ))?;
+
+    // Attempt to parse the exercise type string if it's not NULL
+    let exercise_type = match type_str_opt {
+        Some(type_str) => {
+            match ExerciseType::try_from(type_str.as_str()) {
+                Ok(et) => Some(et),
+                Err(e) => {
+                    // Log or handle the error if the type in the DB is invalid, but don't fail the whole row mapping
+                    eprintln!("Warning: Invalid exercise type '{}' in database for exercise '{}': {}", type_str, exercise_name, e);
+                    None // Treat as unknown type
+                }
+            }
+        },
+        None => None, // No type found (LEFT JOIN failed or type was NULL)
+    };
+
     Ok(Workout {
-        id: row.get(0)?,
+        id,
         timestamp,
-        exercise_name: row.get(2)?,
-        sets: row.get(3)?,
-        reps: row.get(4)?,
-        weight: row.get(5)?,
-        duration_minutes: row.get(6)?,
-        notes: row.get(7)?,
+        exercise_name,
+        sets,
+        reps,
+        weight,
+        duration_minutes,
+        notes,
+        exercise_type, // Store the parsed type
     })
-}
+ }
+
 
 
 /// Lists workout entries from the database, ordered by timestamp descending.
 pub fn list_workouts(conn: &Connection, limit: u32) -> Result<Vec<Workout>> {
     let mut stmt = conn.prepare(
-        "SELECT id, timestamp, exercise_name, sets, reps, weight, duration_minutes, notes
-         FROM workouts
+         "SELECT w.id, w.timestamp, w.exercise_name, w.sets, w.reps, w.weight, w.duration_minutes, w.notes, e.type
+         FROM workouts w
+         LEFT JOIN exercises e ON w.exercise_name = e.name -- Join to get exercise type
          ORDER BY timestamp DESC
          LIMIT ?1",
     )?;
@@ -287,15 +328,20 @@ pub fn list_workouts_for_date(
     params_vec.push(&date_str);
     let exercise_sql;
 
-    let mut sql = "SELECT id, timestamp, exercise_name, sets, reps, weight, duration_minutes, notes
-                   FROM workouts
-                   WHERE date(timestamp) = date(?1)"
-                   .to_string();
+    let name_param: String; // Need to hold the String if exercise_filter is Some
+
+    let mut sql = "SELECT w.id, w.timestamp, w.exercise_name, w.sets, w.reps, w.weight, w.duration_minutes, w.notes, e.type
+    FROM workouts w
+    LEFT JOIN exercises e ON w.exercise_name = e.name
+    WHERE date(timestamp) = date(?1)"
+        .to_string();
 
     if let Some(exercise) = exercise_filter {
         sql.push_str(" AND exercise_name = ?2");
         exercise_sql = exercise.to_sql().unwrap();
         params_vec.push(&exercise_sql); // Add exercise to params
+        name_param = exercise.to_string(); // Assign the owned String
+        params_vec.push(&name_param);
     }
 
     sql.push_str(" ORDER BY timestamp ASC"); // Order chronologically within the day
@@ -333,8 +379,9 @@ pub fn list_workouts_for_exercise_on_nth_last_day(
             ORDER BY workout_date DESC
             LIMIT 1 OFFSET ?2
         )
-        SELECT w.id, w.timestamp, w.exercise_name, w.sets, w.reps, w.weight, w.duration_minutes, w.notes
+        SELECT w.id, w.timestamp, w.exercise_name, w.sets, w.reps, w.weight, w.duration_minutes, w.notes, e.type
         FROM workouts w
+        LEFT JOIN exercises e ON w.exercise_name = e.name
         JOIN RankedDays rd ON date(w.timestamp) = rd.workout_date
         WHERE w.exercise_name = ?1
         ORDER BY w.timestamp ASC; -- Order chronologically within that day
@@ -465,7 +512,7 @@ pub fn delete_exercise(conn: &Connection, identifier: &str) -> Result<u64> {
 /// Retrieves an exercise definition by its name.
 pub fn get_exercise_by_name(conn: &Connection, name: &str) -> Result<Option<ExerciseDefinition>> {
     let mut stmt = conn.prepare(
-        "SELECT id, name, type, muscles FROM exercises WHERE name = ?1",
+        "SELECT id, name, type, muscles FROM exercises WHERE name = ?1 COLLATE NOCASE", // Use COLLATE NOCASE for case-insensitive matching
     )?;
     let mut rows = stmt.query_map(params![name], |row| {
         let type_str: String = row.get(2)?;
@@ -492,6 +539,56 @@ pub fn get_exercise_by_name(conn: &Connection, name: &str) -> Result<Option<Exer
         Some(Err(e)) => Err(e.into()), // Propagate rusqlite or conversion errors
         None => Ok(None),
     }
+}
+
+pub fn get_exercise_by_id(conn: &Connection, id: i64) -> Result<Option<ExerciseDefinition>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, name, type, muscles FROM exercises WHERE id = ?1",
+    )?;
+    let mut rows = stmt.query_map(params![id], |row| {
+        let type_str: String = row.get(2)?;
+        let ex_type = ExerciseType::try_from(type_str.as_str())
+            .map_err(|e| {
+                let err_msg = e.to_string();
+                rusqlite::Error::FromSqlConversionFailure(
+                    2,
+                    rusqlite::types::Type::Text,
+                    Box::<dyn std::error::Error + Send + Sync>::from(err_msg),
+                )
+            })?;
+        Ok(ExerciseDefinition {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            type_: ex_type,
+            muscles: row.get(3)?,
+        })
+    })?;
+
+    match rows.next() {
+        Some(Ok(exercise)) => Ok(Some(exercise)),
+        Some(Err(e)) => Err(e.into()),
+        None => Ok(None),
+    }
+}
+
+/// Retrieves an exercise definition by trying ID first, then name.
+pub fn get_exercise_by_identifier(conn: &Connection, identifier: &str) -> Result<Option<ExerciseDefinition>> {
+    if let Ok(id) = identifier.parse::<i64>() {
+        match get_exercise_by_id(conn, id)? {
+            Some(exercise) => return Ok(Some(exercise)),
+            None => {
+                // It looked like an ID but wasn't found.
+                // Should we try it as a name too? Maybe, if names can be numeric.
+                // For now, let's assume if it parses as ID, it *is* an ID.
+                // If IDs and numeric names are possible, this logic needs refinement.
+                return Ok(None); // ID not found
+            }
+        }
+    } else {
+        // Not a valid i64, treat as name
+        get_exercise_by_name(conn, identifier)
+    }
+
 }
 
 /// Lists defined exercises, optionally filtering by type and/or muscle.
@@ -544,3 +641,38 @@ pub fn list_exercises(
     Ok(exercises)
 }
 
+fn set_setting(conn: &Connection, key: &str, value: &str) -> Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)",
+        params![key, value],
+    )?;
+    Ok(())
+}
+
+/// Gets a setting value from the database.
+fn get_setting(conn: &Connection, key: &str) -> Result<Option<String>> {
+    let mut stmt = conn.prepare("SELECT value FROM settings WHERE key = ?1")?;
+    let mut rows = stmt.query_map(params![key], |row| row.get(0))?;
+    match rows.next() {
+        Some(Ok(value)) => Ok(Some(value)),
+        Some(Err(e)) => Err(e.into()),
+        None => Ok(None),
+    }
+}
+
+/// Sets the user's bodyweight.
+pub fn set_bodyweight(conn: &Connection, weight: f64) -> Result<()> {
+    set_setting(conn, BODYWEIGHT_KEY, &weight.to_string())
+}
+
+/// Gets the user's bodyweight.
+pub fn get_bodyweight(conn: &Connection) -> Result<Option<f64>> {
+    match get_setting(conn, BODYWEIGHT_KEY)? {
+        Some(val_str) => {
+            let weight = val_str.parse::<f64>()
+                .with_context(|| format!("Failed to parse stored bodyweight '{}' as f64", val_str))?;
+            Ok(Some(weight))
+        }
+        None => Ok(None),
+    }
+}

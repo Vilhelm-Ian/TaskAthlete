@@ -1,0 +1,13 @@
+[package]
+name = "workout-tracker-cli"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rusqlite = { version = "0.31", features = ["bundled"] } # Bundles SQLite
+clap = { version = "4.5", features = ["derive"] }
+chrono = { version = "0.4", features = ["serde"] } # Serde feature might be useful later
+anyhow = "1.0" # For easier error handling
+thiserror = "1.0" # For custom error types (optional but good practice)
+dirs = "5.0" # To find system directories
+comfy-table = "7.1" # For pretty table output

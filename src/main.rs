@@ -37,6 +37,41 @@ fn main() -> Result<()> {
                 }
             }
         }
+        cli::Commands::EditExercise {
+            identifier,
+            name,
+            type_,
+            muscles,
+        } => {
+            // Convert CLI enum to DB enum if provided
+            let result;
+            let db_type = match type_ {
+                Some(type_) => {
+                    result = match type_ {
+                        cli::ExerciseTypeCli::Resistance => db::ExerciseType::Resistance,
+                        cli::ExerciseTypeCli::Cardio => db::ExerciseType::Cardio,
+                    };
+                    Some(&result)
+                }
+                None => None
+            };
+
+            let rows_affected = db::update_exercise(
+                &conn,
+                &identifier,
+                name,
+                db_type,
+                muscles.as_deref(),
+            )
+            .context("Failed to update exercise")?;
+
+            println!("Successfully updated exercise ({} rows affected)", rows_affected);
+        }
+        cli::Commands::DeleteExercise { identifier } => {
+            let rows_affected = db::delete_exercise(&conn, &identifier)
+                .context("Failed to delete exercise")?;
+            println!("Successfully deleted exercise ({} rows affected)", rows_affected);
+        }
         cli::Commands::Add {
             exercise,
             sets,
@@ -116,6 +151,33 @@ fn main() -> Result<()> {
             } else {
                 print_exercise_definition_table(exercises);
             }
+        }
+        cli::Commands::EditWorkout {
+            identifier,
+            exercise,
+            sets,
+            reps,
+            weight,
+            duration,
+            notes,
+        } => {
+            let rows_affected = db::update_workout(
+                &conn,
+                &identifier,
+                exercise.as_deref(),
+                sets,
+                reps,
+                weight,
+                duration,
+                notes.as_deref(),
+            )
+            .context("Failed to update workout")?;
+            println!("Successfully updated workout ({} rows affected)", rows_affected);
+        }
+        cli::Commands::DeleteWorkout { id } => {
+            let rows_affected = db::delete_workout(&conn, id)
+                .context("Failed to delete workout")?;
+            println!("Successfully deleted workout ({} rows affected)", rows_affected);
         }
         cli::Commands::DbPath => {
             println!("Database file is located at: {:?}", db_path);

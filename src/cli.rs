@@ -29,6 +29,18 @@ pub enum Commands {
         #[arg(short, long)]
         muscles: Option<String>,
     },
+    DeleteExercise {
+        identifier: String, // Can be either string or number
+    },
+    EditExercise {
+        identifier: String, // Can be either string or number
+        name: Option<String>,
+        #[arg(short, long, value_enum)]
+        type_: Option<ExerciseTypeCli>,
+        /// Comma-separated list of target muscles (e.g., "chest,triceps,shoulders")
+        #[arg(short, long)]
+        muscles: Option<String>,
+    },
     /// Add a new workout entry
     Add {
         /// Name of the exercise
@@ -61,6 +73,31 @@ pub enum Commands {
 
         #[arg(long, requires = "implicit-exercise-type")] // Refer to the ID 
         muscles: Option<String>,
+    },
+    EditWorkout {
+        identifier: String, // Can be the name or id
+        /// New name of the exercise
+        #[arg(short, long)]
+        exercise: Option<String>,
+        /// New number of sets performed
+        #[arg(short, long)]
+        sets: Option<i64>,
+        /// New number of repetitions per set
+        #[arg(short, long)]
+        reps: Option<i64>,
+        /// New weight used
+        #[arg(short, long)]
+        weight: Option<f64>,
+        /// New duration in minutes
+        #[arg(short, long)]
+        duration: Option<i64>,
+        /// New additional notes
+        #[arg(short, long)]
+        notes: Option<String>,
+    },
+    DeleteWorkout {
+        /// ID of the workout to delete
+        id: i64,
     },
     /// List workout entries
     List {

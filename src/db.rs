@@ -146,6 +146,92 @@ pub fn add_workout(
     Ok(conn.last_insert_rowid())
 }
 
+
+/// Updates an existing workout entry in the database.
+/// Returns the number of rows affected (should be 1 if successful).
+pub fn update_workout(
+    conn: &Connection,
+    identifier: &str,
+    exercise: Option<&str>,
+    sets: Option<i64>,
+    reps: Option<i64>,
+    weight: Option<f64>,
+    duration: Option<i64>,
+    notes: Option<&str>,
+) -> Result<u64> {
+    let mut params: Vec<Box<dyn ToSql>> = Vec::new();
+    let mut updates = Vec::new();
+    let id = if let Ok(id) = identifier.parse::<i64>() {
+    id
+    } else {
+        // Look up by name
+        if let Some(ex) = get_exercise_by_name(conn, identifier)? {
+            ex.id
+        } else {
+            anyhow::bail!("Exercise '{}' not found", identifier);
+        }
+    };
+
+
+    if let Some(ex) = exercise {
+        updates.push("exercise_name = ?");
+        params.push(Box::new(ex));
+    }
+
+    if let Some(s) = sets {
+        updates.push("sets = ?");
+        params.push(Box::new(s));
+    }
+
+    if let Some(r) = reps {
+        updates.push("reps = ?");
+        params.push(Box::new(r));
+    }
+
+    if let Some(w) = weight {
+        updates.push("weight = ?");
+        params.push(Box::new(w));
+    }
+
+    if let Some(d) = duration {
+        updates.push("duration_minutes = ?");
+        params.push(Box::new(d));
+    }
+
+    if let Some(n) = notes {
+        updates.push("notes = ?");
+        params.push(Box::new(n));
+    }
+
+    if updates.is_empty() {
+        anyhow::bail!("No fields to update");
+    }
+
+    let mut sql = format!("UPDATE workouts SET {} WHERE id = ?", updates.join(", "));
+    params.push(Box::new(id));
+
+    let params_slice: Vec<&dyn ToSql> = params.iter().map(|b| b.as_ref()).collect();
+    let rows_affected = conn.execute(&sql, params_slice.as_slice())?;
+
+    if rows_affected == 0 {
+        anyhow::bail!("Workout not found or no changes made");
+    }
+
+    Ok(rows_affected as u64)
+}
+
+/// Deletes a workout entry from the database.
+/// Returns the number of rows affected (should be 1 if successful).
+pub fn delete_workout(conn: &Connection, id: i64) -> Result<u64> {
+    let rows_affected = conn.execute("DELETE FROM workouts WHERE id = ?", params![id])?;
+    
+    if rows_affected == 0 {
+        anyhow::bail!("Workout not found");
+    }
+
+    Ok(rows_affected as u64)
+}
+
 // Helper function to map a database row to a Workout struct
 fn map_row_to_workout(row: &Row) -> Result<Workout, rusqlite::Error> {
     let timestamp_str: String = row.get(1)?;
@@ -293,6 +379,87 @@ pub fn create_exercise(
     }
 
     Ok(conn.last_insert_rowid())
+}
+
+/// Updates an existing exercise definition in the database.
+/// Can update name, type, and/or muscles.
+/// Returns the number of rows affected (should be 1 if successful).
+pub fn update_exercise(
+    conn: &Connection,
+    identifier: &str, // Can be name or ID
+    new_name: Option<String>,
+    new_type: Option<&ExerciseType>,
+    new_muscles: Option<&str>,
+) -> Result<u64> {
+    // First try to parse as ID, if not assume it's a name
+    let id = if let Ok(id) = identifier.parse::<i64>() {
+        id
+    } else {
+        // Look up by name
+        if let Some(ex) = get_exercise_by_name(conn, identifier)? {
+            ex.id
+        } else {
+            anyhow::bail!("Exercise '{}' not found", identifier);
+        }
+    };
+
+    let mut params: Vec<Box<dyn ToSql>> = Vec::new();
+    let mut updates = Vec::new();
+
+    if let Some(name) = new_name {
+        updates.push("name = ?");
+        params.push(Box::new(name));
+    }
+
+    if let Some(t) = new_type {
+        updates.push("type = ?");
+        params.push(Box::new(t.to_string()));
+    }
+
+    if let Some(m) = new_muscles {
+        updates.push("muscles = ?");
+        params.push(Box::new(m));
+    }
+
+    if updates.is_empty() {
+        anyhow::bail!("No fields to update");
+    }
+
+    let sql = format!("UPDATE exercises SET {} WHERE id = ?", updates.join(", "));
+    params.push(Box::new(id));
+
+    let params_slice: Vec<&dyn ToSql> = params.iter().map(|b| b.as_ref()).collect();
+    let rows_affected = conn.execute(&sql, params_slice.as_slice())?;
+
+    if rows_affected == 0 {
+        anyhow::bail!("Exercise not found or no changes made");
+    }
+
+    Ok(rows_affected as u64)
+}
+
+/// Deletes an exercise definition from the database.
+/// Returns the number of rows affected (should be 1 if successful).
+pub fn delete_exercise(conn: &Connection, identifier: &str) -> Result<u64> {
+    // First try to parse as ID, if not assume it's a name
+    let id = if let Ok(id) = identifier.parse::<i64>() {
+        id
+    } else {
+        // Look up by name
+        if let Some(ex) = get_exercise_by_name(conn, identifier)? {
+            ex.id
+        } else {
+            anyhow::bail!("Exercise '{}' not found", identifier);
+        }
+    };
+
+    let rows_affected = conn.execute("DELETE FROM exercises WHERE id = ?", params![id])?;
+    
+    if rows_affected == 0 {
+        anyhow::bail!("Exercise not found");
+    }
+
+    Ok(rows_affected as u64)
 }
 
 /// Retrieves an exercise definition by its name.

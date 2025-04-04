@@ -123,7 +123,7 @@ impl AppService {
 
     /// Resolves an identifier (ID, Alias, Name) to an ExerciseDefinition.
     /// Returns Ok(None) if not found, Err if DB error occurs.
-    fn resolve_exercise_identifier(&self, identifier: &str) -> Result<Option<ExerciseDefinition>> {
+    pub  fn resolve_exercise_identifier(&self, identifier: &str) -> Result<Option<ExerciseDefinition>> {
         let trimmed = identifier.trim();
         if trimmed.is_empty() {
             bail!("Exercise identifier cannot be empty.");

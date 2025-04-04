@@ -160,11 +160,6 @@ pub fn update_workout(
     if new_duration.is_some() { updates.push("duration_minutes = ?"); params.push(Box::new(new_duration)); }
     if new_notes.is_some() { updates.push("notes = ?"); params.push(Box::new(new_notes)); }
 
-    if updates.is_empty() {
-         // Return Ok(0) as no fields were provided to update
-         return Ok(0);
-    }
-
     let sql = format!("UPDATE workouts SET {} WHERE id = ?", updates.join(", "));
     params.push(Box::new(id));
     let params_slice: Vec<&dyn ToSql> = params.iter().map(|b| b.as_ref()).collect();

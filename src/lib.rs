@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 // --- Declare modules to load from separate files ---
 mod config;
-mod db;
+pub mod db;
 
 // --- Expose public types ---
 pub use config::{

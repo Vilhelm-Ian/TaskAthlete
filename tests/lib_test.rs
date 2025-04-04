@@ -226,55 +226,54 @@ fn test_workout_filters() -> Result<()> {
     Ok(())
 }
 
-// This test can't be tested currently there is no funcitionality to change date
-// #[test]
-// fn test_nth_last_day_workouts() -> Result<()> {
-//     let mut service = create_test_service()?;
-//     let today = Utc::now().date_naive();
-//     let yesterday = today - chrono::Duration::days(1);
+#[test]
+fn test_nth_last_day_workouts() -> Result<()> {
+    let mut service = create_test_service()?;
 
-//     // Create an exercise
-//     service.create_exercise("Squats", ExerciseType::Resistance, Some("legs"))?;
+    // Create an exercise
+    service.create_exercise("Squats", ExerciseType::Resistance, Some("legs"))?;
 
-//     // Add workouts on different dates
-//     // First workout (older)
-//     service.add_workout(
-//         "Squats",
-//         Some(3),
-//         Some(10),
-//         Some(100.0),
-//         None,
-//         Some("First workout".to_string()),
-//         None,
-//         None,
-//         None,
-//     )?;
+    // Add workouts on different dates
+    // First workout (older)
+    service.add_workout(
+        "Squats",
+        NaiveDate::from_ymd_opt(2015, 6, 2).unwrap(),
+        Some(3),
+        Some(10),
+        Some(100.0),
+        None,
+        Some("First workout".to_string()),
+        None,
+        None,
+        None,
+    )?;
 
-//     // Second workout (more recent)
-//     service.add_workout(
-//         "Squats",
-//         Some(5),
-//         Some(5),
-//         Some(120.0),
-//         None,
-//         Some("Second workout".to_string()),
-//         None,
-//         None,
-//         None,
-//     )?;
+    // Second workout (more recent)
+    service.add_workout(
+        "Squats",
+        NaiveDate::from_ymd_opt(2015, 6, 3).unwrap(),
+        Some(5),
+        Some(5),
+        Some(120.0),
+        None,
+        Some("Second workout".to_string()),
+        None,
+        None,
+        None,
+    )?;
 
-//     // Get workouts for the most recent day (n=1)
-//     let recent_workouts = service.list_workouts_for_exercise_on_nth_last_day("Squats", 1)?;
-//     assert_eq!(recent_workouts.len(), 1);
-//     assert_eq!(recent_workouts[0].sets, Some(5));
+    // Get workouts for the most recent day (n=1)
+    let recent_workouts = service.list_workouts_for_exercise_on_nth_last_day("Squats", 1)?;
+    assert_eq!(recent_workouts.len(), 1);
+    assert_eq!(recent_workouts[0].sets, Some(5));
 
-//     // Get workouts for the previous day (n=2)
-//     let previous_workouts = service.list_workouts_for_exercise_on_nth_last_day("Squats", 2)?;
-//     assert_eq!(previous_workouts.len(), 1);
-//     assert_eq!(previous_workouts[0].sets, Some(3));
+    // Get workouts for the previous day (n=2)
+    let previous_workouts = service.list_workouts_for_exercise_on_nth_last_day("Squats", 2)?;
+    assert_eq!(previous_workouts.len(), 1);
+    assert_eq!(previous_workouts[0].sets, Some(3));
 
-//     Ok(())
-// }
+    Ok(())
+}
 
 #[test]
 fn test_config_operations() -> Result<()> {

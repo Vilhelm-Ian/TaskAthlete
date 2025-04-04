@@ -1,8 +1,7 @@
-// tests/lib_test.rs
 use anyhow::Result;
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::NaiveDate;
 use workout_tracker_lib::{
-    AppService, Config, ConfigError, DbError, ExerciseDefinition, ExerciseType, Units, Workout,
+    AppService, Config, ConfigError, DbError, ExerciseType, Units, 
     WorkoutFilters,
 };
 
@@ -64,6 +63,7 @@ fn test_add_and_list_workouts() -> Result<()> {
     // Add some workouts
     service.add_workout(
         "Bench Press",
+        NaiveDate::from_ymd_opt(2015, 6, 2).unwrap(),
         Some(3),
         Some(10),
         Some(60.0),
@@ -76,6 +76,7 @@ fn test_add_and_list_workouts() -> Result<()> {
 
     service.add_workout(
         "Bench Press",
+        NaiveDate::from_ymd_opt(2015, 6, 3).unwrap(),
         Some(4),
         Some(8),
         Some(70.0),
@@ -110,6 +111,7 @@ fn test_bodyweight_workouts() -> Result<()> {
     // Add workout with additional weight
     service.add_workout(
         "Pull-ups",
+        NaiveDate::from_ymd_opt(2015, 6, 3).unwrap(),
         Some(3),
         Some(10),
         Some(5.0), // Additional weight
@@ -149,7 +151,7 @@ fn test_edit_exercise() -> Result<()> {
 
     // Verify changes
     let exercise = service
-        .get_exercise_by_identifier("Barbell Bench Press")?
+        .get_exercise_by_identifier_service("Barbell Bench Press")?
         .unwrap();
     assert_eq!(exercise.name, "Barbell Bench Press");
     assert_eq!(exercise.muscles, Some("chest,triceps,shoulders".to_string()));
@@ -159,7 +161,7 @@ fn test_edit_exercise() -> Result<()> {
 
 #[test]
 fn test_delete_exercise() -> Result<()> {
-    let service = create_test_service()?;
+    let mut service = create_test_service()?;
 
     // Create an exercise
     service.create_exercise("Bench Press", ExerciseType::Resistance, Some("chest"))?;
@@ -169,7 +171,7 @@ fn test_delete_exercise() -> Result<()> {
     assert_eq!(result, 1);
 
     // Verify it's gone
-    let exercise = service.get_exercise_by_identifier("Bench Press")?;
+    let exercise = service.get_exercise_by_identifier_service("Bench Press")?;
     assert!(exercise.is_none());
 
     Ok(())
@@ -187,6 +189,7 @@ fn test_workout_filters() -> Result<()> {
     // Hack: We can't set the timestamp directly, so we'll add with a small delay
     service.add_workout(
         "Running",
+        NaiveDate::from_ymd_opt(2015, 6, 3).unwrap(),
         None,
         None,
         None,
@@ -200,6 +203,7 @@ fn test_workout_filters() -> Result<()> {
     // Add another workout
     service.add_workout(
         "Curl",
+        NaiveDate::from_ymd_opt(2015, 6, 3).unwrap(),
         None,
         None,
         None,
@@ -296,7 +300,7 @@ fn test_exercise_not_found() -> Result<()> {
     let mut service = create_test_service()?;
 
     // Try to get non-existent exercise
-    let result = service.get_exercise_by_identifier("Non-existent");
+    let result = service.get_exercise_by_identifier_service("Non-existent");
     assert!(result.is_ok()); // Should return Ok(None)
     assert!(result?.is_none());
 
@@ -316,7 +320,8 @@ fn test_workout_not_found() -> Result<()> {
     let service = create_test_service()?;
 
     // Try to edit non-existent workout
-    let result = service.edit_workout(999, None, None, None, None, None, None);
+    let result = service.edit_workout(999, None, None, None, None, None, None, None);
+    println!("testing {:?}", result);
     assert!(result.is_err());
 
     // Try to delete non-existent workout

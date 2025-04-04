@@ -1,6 +1,6 @@
 // src/cli.rs
 use clap::{Parser, Subcommand, ValueEnum};
-use chrono::{NaiveDate, Utc, Duration}; // Import chrono
+use chrono::{NaiveDate, Utc, Duration, DateTime}; // Import DateTime
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "A CLI tool to track workouts", long_about = None)]
@@ -37,7 +37,7 @@ fn parse_date_shorthand(s: &str) -> Result<NaiveDate, String> {
             }
             else {
                  Err(format!(
-                    "Invalid date format: '{}'. Use 'today', 'yesterday', YYYY-MM-DD, or DD.MM.YYYY.",
+                    "Invalid date format: '{}'. Use 'today', 'yesterday', YYYY-MM-DD, DD.MM.YYYY, or YYYY/MM/DD.", // Updated help message
                     s
                 ))
             }
@@ -50,7 +50,7 @@ fn parse_date_shorthand(s: &str) -> Result<NaiveDate, String> {
 pub enum Commands {
     /// Define a new exercise type
     CreateExercise {
-        /// Name of the exercise (e.g., "Bench Press", "Running")
+        /// Name of the exercise (e.g., "Bench Press", "Running") - Must be unique (case-insensitive)
         #[arg(short, long)]
         name: String,
         /// Type of exercise
@@ -62,14 +62,14 @@ pub enum Commands {
     },
     /// Delete an exercise definition
     DeleteExercise {
-        /// ID or Name of the exercise to delete
+        /// ID, Name, or Alias of the exercise to delete
         identifier: String,
     },
     /// Edit an exercise definition
     EditExercise {
-        /// ID or Name of the exercise to edit
+        /// ID, Name, or Alias of the exercise to edit
         identifier: String,
-        /// New name for the exercise
+        /// New name for the exercise (must be unique)
         #[arg(short, long)]
         name: Option<String>,
         /// New type for the exercise
@@ -81,7 +81,7 @@ pub enum Commands {
     },
     /// Add a new workout entry
     Add {
-        /// Name or ID of the exercise (will prompt to create if not found and type/muscles given)
+        /// Name, ID, or Alias of the exercise (will prompt to create if not found and type/muscles given)
         #[arg(short = 'e', long)] // Added short alias
         exercise: String,
 
@@ -105,6 +105,10 @@ pub enum Commands {
         #[arg(short, long)]
         notes: Option<String>,
 
+        /// Date of the workout ('today', 'yesterday', YYYY-MM-DD, DD.MM.YYYY, YYYY/MM/DD)
+        #[arg(long, value_parser = parse_date_shorthand, default_value = "today")] // Feature 3
+        date: NaiveDate,
+
         // Optional fields for implicit exercise creation during 'add' if exercise not found
         #[arg(long = "type", value_enum, requires = "implicit-muscles", id = "implicit-exercise-type")]
         implicit_type: Option<ExerciseTypeCli>, // Renamed to avoid clash with filter
@@ -116,7 +120,7 @@ pub enum Commands {
     EditWorkout {
         /// ID of the workout entry to edit
         id: i64, // Use ID for editing specific entries
-        /// New exercise name/ID for the workout
+        /// New exercise Name, ID or Alias for the workout
         #[arg(short = 'e', long)] // Added short alias
         exercise: Option<String>,
         /// New number of sets performed
@@ -134,6 +138,9 @@ pub enum Commands {
         /// New additional notes
         #[arg(short, long)]
         notes: Option<String>,
+         /// New date for the workout ('today', 'yesterday', YYYY-MM-DD, DD.MM.YYYY, YYYY/MM/DD)
+        #[arg(long, value_parser = parse_date_shorthand)] // Feature 3 (for editing date)
+        date: Option<NaiveDate>,
     },
     /// Delete a workout entry
     DeleteWorkout {
@@ -142,7 +149,7 @@ pub enum Commands {
     },
     /// List workout entries with filters
     List {
-         /// Filter by exercise Name or ID
+         /// Filter by exercise Name, ID or Alias
         #[arg(short = 'e', long, conflicts_with = "nth_last_day_exercise")]
         exercise: Option<String>,
 
@@ -169,8 +176,8 @@ pub enum Commands {
         yesterday_flag: bool,
 
 
-        /// Show workouts for the Nth most recent day a specific exercise was performed
-        #[arg(long, value_name = "EXERCISE_NAME", requires = "nth_last_day_n", conflicts_with_all = &["limit", "date", "today_flag", "yesterday_flag", "exercise", "type_", "muscle"])]
+        /// Show workouts for the Nth most recent day a specific exercise (Name, ID, Alias) was performed
+        #[arg(long, value_name = "EXERCISE_IDENTIFIER", requires = "nth_last_day_n", conflicts_with_all = &["limit", "date", "today_flag", "yesterday_flag", "exercise", "type_", "muscle"])]
         nth_last_day_exercise: Option<String>,
         #[arg(long, value_name = "N", requires = "nth_last_day_exercise", conflicts_with_all = &["limit", "date", "today_flag", "yesterday_flag", "exercise", "type_", "muscle"])]
         nth_last_day_n: Option<u32>,
@@ -185,6 +192,20 @@ pub enum Commands {
         #[arg(short='m', long)] // short 'm'
         muscle: Option<String>,
     },
+    /// Create an alias for an existing exercise
+    Alias { // Feature 1
+        /// The alias name (e.g., "bp") - Must be unique
+        alias_name: String,
+        /// The ID, Name, or existing Alias of the exercise to alias
+        exercise_identifier: String,
+    },
+    /// Delete an exercise alias
+    Unalias { // Feature 1
+        /// The alias name to delete
+        alias_name: String,
+    },
+    /// List all defined exercise aliases
+    ListAliases, // Feature 1
     /// Show the path to the database file
     DbPath,
     /// Show the path to the config file
@@ -193,6 +214,11 @@ pub enum Commands {
     SetBodyweight{
         /// Your current bodyweight
         weight: f64
+    },
+    /// Enable or disable Personal Best (PB) notifications
+    SetPbNotification { // Feature 4
+        /// Enable PB notifications (`true` or `false`)
+        enabled: bool,
     },
     // Maybe add a command to set units later: SetUnits { units: UnitsCli }
 }

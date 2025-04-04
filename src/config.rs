@@ -1,4 +1,3 @@
-// src/config.rs
 use anyhow::{Context, Result};
 use comfy_table::Color;
 use serde::{Deserialize, Serialize};
@@ -32,6 +31,12 @@ pub enum ConfigError {
     BodyweightPromptCancelled,
     #[error("Invalid bodyweight input: {0}")]
     InvalidBodyweightInput(String),
+    #[error("Personal best notification setting not configured. Please enable/disable using 'set-pb-notification true|false'.")] // Feature 4
+    PbNotificationNotSet,
+    #[error("Personal best notification prompt cancelled by user.")] // Feature 4
+    PbNotificationPromptCancelled,
+    #[error("Invalid input for PB notification prompt: {0}")] // Feature 4
+    InvalidPbNotificationInput(String),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,6 +104,7 @@ pub struct Config {
     pub bodyweight: Option<f64>,
     pub units: Units,
     pub prompt_for_bodyweight: bool, // Default is true
+    pub notify_on_pb: Option<bool>, // Feature 4: None = ask, Some(true/false) = configured
     pub theme: ThemeConfig,
 }
 
@@ -109,6 +115,7 @@ impl Config {
             bodyweight: None,
             units: Units::default(),
             prompt_for_bodyweight: true, // Explicitly true by default
+            notify_on_pb: None, // Default to None, so user is prompted first time
             theme: ThemeConfig::default(),
         }
     }
@@ -155,7 +162,12 @@ pub fn load_config(config_path: &Path) -> Result<Config, ConfigError> {
          Ok(default_config)
     } else {
          let config_content = fs::read_to_string(&config_path)?;
-         let config: Config = toml::from_str(&config_content)?;
+         let mut config: Config = toml::from_str(&config_content)?;
+         // Ensure default for new fields if loading old config
+         if config.notify_on_pb.is_none() {
+             // If the field didn't exist in the file, keep it None (will prompt user)
+             // Don't need to save here, only on explicit change or prompt result.
+         }
          Ok(config)
     }
 }

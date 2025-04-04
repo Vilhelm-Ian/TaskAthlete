@@ -1,22 +1,28 @@
 [package]
-name = "TaskAthlete"        # Or whatever you want to call your project
-version = "0.1.0"           # Initial version
-edition = "2021"            # Recommended edition
+name = "TaskAthlete"
+version = "0.1.0"
+edition = "2021"
+about = "A CLI tool to track workouts"
 
-# --- Keep your existing sections below ---
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 anyhow = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4.4", features = ["derive"] }
-comfy-table = "7.0"
+comfy-table = "7.0" # Or latest version
 dirs = "5.0"
-rusqlite = { version = "0.30", features = ["chrono", "bundled"] }
+rusqlite = { version = "0.30", features = ["chrono", "bundled"] } # bundled is often easier
 serde = { version = "1.0", features = ["derive"] }
-strum = "0.25"
-strum_macros = "0.25"
 thiserror = "1.0"
 toml = "0.8"
+strum = "0.25"
+strum_macros = "0.25"
 
-[features]
-default = []
+[lib]
+name = "workout_tracker_lib"
+path = "src/lib.rs"
+
+[[bin]]
+name = "workout-tracker" # Name of the executable
+path = "src/main.rs"

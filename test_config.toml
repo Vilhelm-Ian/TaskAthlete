@@ -1,0 +1,6 @@
+bodyweight = 75.5
+units = "metric"
+prompt_for_bodyweight = false
+
+[theme]
+header_color = "Green"

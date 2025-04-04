@@ -135,6 +135,7 @@ pub fn add_workout(
     duration: Option<i64>, notes: Option<String>,
 ) -> Result<i64, DbError> { // Return DbError
     let timestamp = Utc::now().to_rfc3339();
+    let sets = sets.unwrap_or(1);
     conn.execute(
         "INSERT INTO workouts (timestamp, exercise_name, sets, reps, weight, duration_minutes, notes)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",

@@ -1,5 +1,6 @@
 // src/cli.rs
 use clap::{Parser, Subcommand, ValueEnum};
+use chrono::{NaiveDate, Utc, Duration}; // Import chrono
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "A CLI tool to track workouts", long_about = None)]
@@ -13,8 +14,37 @@ pub struct Cli {
 pub enum ExerciseTypeCli {
     Resistance,
     Cardio,
-    BodyWeight
+    BodyWeight,
 }
+
+// Custom parser for date strings and shorthands
+fn parse_date_shorthand(s: &str) -> Result<NaiveDate, String> {
+    match s.to_lowercase().as_str() {
+        "today" => Ok(Utc::now().date_naive()),
+        "yesterday" => Ok((Utc::now() - Duration::days(1)).date_naive()),
+        _ => {
+            // Try parsing YYYY-MM-DD first
+            if let Ok(date) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                Ok(date)
+            }
+            // Try parsing DD.MM.YYYY next
+            else if let Ok(date) = NaiveDate::parse_from_str(s, "%d.%m.%Y") {
+                Ok(date)
+            }
+            // Try parsing YYYY/MM/DD
+            else if let Ok(date) = NaiveDate::parse_from_str(s, "%Y/%m/%d") {
+                 Ok(date)
+            }
+            else {
+                 Err(format!(
+                    "Invalid date format: '{}'. Use 'today', 'yesterday', YYYY-MM-DD, or DD.MM.YYYY.",
+                    s
+                ))
+            }
+        }
+    }
+}
+
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
@@ -24,61 +54,70 @@ pub enum Commands {
         #[arg(short, long)]
         name: String,
         /// Type of exercise
-        #[arg(short, long, value_enum)]
+        #[arg(short = 't', long, value_enum)] // Changed short arg
         type_: ExerciseTypeCli,
         /// Comma-separated list of target muscles (e.g., "chest,triceps,shoulders")
         #[arg(short, long)]
         muscles: Option<String>,
     },
+    /// Delete an exercise definition
     DeleteExercise {
-        identifier: String, // Can be either string or number
+        /// ID or Name of the exercise to delete
+        identifier: String,
     },
+    /// Edit an exercise definition
     EditExercise {
-        identifier: String, // Can be either string or number
+        /// ID or Name of the exercise to edit
+        identifier: String,
+        /// New name for the exercise
+        #[arg(short, long)]
         name: Option<String>,
-        #[arg(short, long, value_enum)]
+        /// New type for the exercise
+        #[arg(short = 't', long, value_enum)] // Changed short arg
         type_: Option<ExerciseTypeCli>,
-        /// Comma-separated list of target muscles (e.g., "chest,triceps,shoulders")
+        /// New comma-separated list of target muscles
         #[arg(short, long)]
         muscles: Option<String>,
     },
     /// Add a new workout entry
     Add {
-        /// Name of the exercise
-        #[arg(short, long)]
+        /// Name or ID of the exercise (will prompt to create if not found and type/muscles given)
+        #[arg(short = 'e', long)] // Added short alias
         exercise: String,
 
         /// Number of sets performed
         #[arg(short, long)]
-        sets: Option<i64>, // Use i64 for SQLite INTEGER compatibility
+        sets: Option<i64>,
 
         /// Number of repetitions per set
         #[arg(short, long)]
         reps: Option<i64>,
 
-        /// Weight used (e.g., kg, lbs - specify unit in notes or exercise name if needed)
+        /// Weight used (e.g., kg, lbs). For Bodyweight exercises, this is *additional* weight.
         #[arg(short, long)]
-        weight: Option<f64>, // Use f64 for SQLite REAL compatibility
+        weight: Option<f64>,
 
         /// Duration in minutes (for cardio or timed exercises)
-        #[arg(short, long)]
+        #[arg(short = 'd', long)] // Added short alias
         duration: Option<i64>,
 
         /// Additional notes about the workout
         #[arg(short, long)]
         notes: Option<String>,
 
-        // Optional fields for implicit exercise creation during 'add'
-        #[arg(long = "type", value_enum, requires = "muscles", id = "implicit-exercise-type")]
-        exercise_type: Option<ExerciseTypeCli>,
+        // Optional fields for implicit exercise creation during 'add' if exercise not found
+        #[arg(long = "type", value_enum, requires = "implicit-muscles", id = "implicit-exercise-type")]
+        implicit_type: Option<ExerciseTypeCli>, // Renamed to avoid clash with filter
 
-        #[arg(long, requires = "implicit-exercise-type")] // Refer to the ID 
-        muscles: Option<String>,
+        #[arg(long, requires = "implicit-exercise-type", id = "implicit-muscles")]
+        implicit_muscles: Option<String>, // Renamed to avoid clash with filter
     },
+     /// Edit an existing workout entry
     EditWorkout {
-        identifier: String, // Can be the name or id
-        /// New name of the exercise
-        #[arg(short, long)]
+        /// ID of the workout entry to edit
+        id: i64, // Use ID for editing specific entries
+        /// New exercise name/ID for the workout
+        #[arg(short = 'e', long)] // Added short alias
         exercise: Option<String>,
         /// New number of sets performed
         #[arg(short, long)]
@@ -86,50 +125,79 @@ pub enum Commands {
         /// New number of repetitions per set
         #[arg(short, long)]
         reps: Option<i64>,
-        /// New weight used
+        /// New weight used (absolute value, bodyweight logic NOT reapplied on edit)
         #[arg(short, long)]
         weight: Option<f64>,
         /// New duration in minutes
-        #[arg(short, long)]
+        #[arg(short = 'd', long)] // Added short alias
         duration: Option<i64>,
         /// New additional notes
         #[arg(short, long)]
         notes: Option<String>,
     },
+    /// Delete a workout entry
     DeleteWorkout {
         /// ID of the workout to delete
         id: i64,
     },
-    /// List workout entries
+    /// List workout entries with filters
     List {
-        /// Show only the last N entries
-        #[arg(short, long, default_value_t = 20, conflicts_with_all = &["today", "yesterday", "exercise", "nth_last_day"])]
-        limit: u32,
-        #[arg(long, conflicts_with_all = &["yesterday", "nth_last_day", "limit"])]
-        today: bool,
-        #[arg(long, conflicts_with_all = &["today", "nth_last_day", "limit"])]
-        yesterday: bool,
-        #[arg(long, conflicts_with = "limit")]
+         /// Filter by exercise Name or ID
+        #[arg(short = 'e', long, conflicts_with = "nth_last_day_exercise")]
         exercise: Option<String>,
-        #[arg(long, requires = "exercise", value_name = "N", conflicts_with_all = &["today", "yesterday", "limit"])]
-        nth_last_day: Option<u32>,
+
+        /// Filter by a specific date ('today', 'yesterday', YYYY-MM-DD, DD.MM.YYYY)
+        #[arg(long, value_parser = parse_date_shorthand, conflicts_with_all = &["today_flag", "yesterday_flag", "nth_last_day_exercise"])]
+        date: Option<NaiveDate>,
+
+        /// Filter by exercise type
+        #[arg(short = 't', long, value_enum)]
+        type_: Option<ExerciseTypeCli>,
+
+        /// Filter by target muscle (matches if muscle is in the list)
+        #[arg(short, long)]
+        muscle: Option<String>, // Short 'm'
+
+        /// Show only the last N entries (when no date/day filters used)
+        #[arg(short = 'n', long, default_value_t = 20, conflicts_with_all = &["today_flag", "yesterday_flag", "date", "nth_last_day_exercise"])]
+        limit: u32,
+
+        // Keep flags for backward compatibility or preference, but date is more versatile
+        #[arg(long, conflicts_with_all = &["yesterday_flag", "date", "nth_last_day_exercise", "limit"])]
+        today_flag: bool,
+        #[arg(long, conflicts_with_all = &["today_flag", "date", "nth_last_day_exercise", "limit"])]
+        yesterday_flag: bool,
+
+
+        /// Show workouts for the Nth most recent day a specific exercise was performed
+        #[arg(long, value_name = "EXERCISE_NAME", requires = "nth_last_day_n", conflicts_with_all = &["limit", "date", "today_flag", "yesterday_flag", "exercise", "type_", "muscle"])]
+        nth_last_day_exercise: Option<String>,
+        #[arg(long, value_name = "N", requires = "nth_last_day_exercise", conflicts_with_all = &["limit", "date", "today_flag", "yesterday_flag", "exercise", "type_", "muscle"])]
+        nth_last_day_n: Option<u32>,
+
     },
      /// List defined exercise types
     ListExercises {
         /// Filter by exercise type
-        #[arg(long, value_enum)]
+        #[arg(short='t', long, value_enum)]
         type_: Option<ExerciseTypeCli>,
         /// Filter by a target muscle (matches if the muscle is in the list)
-        #[arg(long)]
+        #[arg(short='m', long)] // short 'm'
         muscle: Option<String>,
     },
     /// Show the path to the database file
     DbPath,
-    SetBodyWeight{ weight: f64}
+    /// Show the path to the config file
+    ConfigPath,
+    /// Set your bodyweight in the config file
+    SetBodyweight{
+        /// Your current bodyweight
+        weight: f64
+    },
+    // Maybe add a command to set units later: SetUnits { units: UnitsCli }
 }
 
 // Function to parse CLI arguments
 pub fn parse_args() -> Cli {
     Cli::parse()
 }
-

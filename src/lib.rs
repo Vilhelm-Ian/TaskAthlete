@@ -294,7 +294,7 @@ impl AppService {
             } else {
                 None
             };
-
+        
         db::update_workout(
             &self.conn,
             id,
@@ -305,7 +305,7 @@ impl AppService {
             new_duration,
             new_notes.as_deref(), // Pass Option<&str>
         )
-        .context(format!("Failed to update workout ID {}", id))
+        .with_context(|| format!("Failed to update workout ID {}", id))
     }
 
 

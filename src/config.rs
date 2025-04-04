@@ -2,10 +2,9 @@ use anyhow::{Context, Result};
 use comfy_table::Color;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::{stdin, Write}; // Import Write for flush
+use std::io::{stdin, Write};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
-// Import strum for color parsing
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 
@@ -38,6 +37,23 @@ pub enum ConfigError {
     #[error("Invalid input for PB notification prompt: {0}")] // Feature 4
     InvalidPbNotificationInput(String),
 }
+
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, EnumIter)]
+#[serde(rename_all = "lowercase")]
+pub enum PbMetricScope {
+    All,     // Check weight and reps
+    Weight,  // Only check weight PBs
+    Reps,    // Only check reps PBs
+    // Note: Disabling notifications entirely is handled by notify_on_pb = false
+}
+
+impl Default for PbMetricScope {
+    fn default() -> Self {
+        PbMetricScope::All // Default to checking both
+    }
+}
+
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -104,7 +120,8 @@ pub struct Config {
     pub bodyweight: Option<f64>,
     pub units: Units,
     pub prompt_for_bodyweight: bool, // Default is true
-    pub notify_on_pb: Option<bool>, // Feature 4: None = ask, Some(true/false) = configured
+    pub notify_on_pb: Option<bool>,
+    pub pb_metric_scope: PbMetricScope,
     pub theme: ThemeConfig,
 }
 
@@ -116,6 +133,7 @@ impl Config {
             units: Units::default(),
             prompt_for_bodyweight: true, // Explicitly true by default
             notify_on_pb: None, // Default to None, so user is prompted first time
+            pb_metric_scope: PbMetricScope::default(),
             theme: ThemeConfig::default(),
         }
     }

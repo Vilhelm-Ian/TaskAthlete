@@ -10,7 +10,7 @@ pub mod db;
 
 // --- Expose public types ---
 pub use config::{
-    Config, ConfigError, ThemeConfig, Units, StandardColor, parse_color,
+    Config, ConfigError, ThemeConfig, Units, StandardColor, parse_color, PbMetricScope,
     get_config_path as get_config_path_util, // Rename utility function
     load_config as load_config_util,         // Rename utility function
     save_config as save_config_util,         // Rename utility function
@@ -18,6 +18,7 @@ pub use config::{
 pub use db::{
     DbError, ExerciseDefinition, ExerciseType, Workout, WorkoutFilters, ResolvedByType,
     get_db_path as get_db_path_util, // Rename utility function
+    VolumeFilters
 };
 
 // --- Personal Best Information (Feature 4) ---
@@ -103,6 +104,12 @@ impl AppService {
          self.save_config()
      }
 
+     /// Sets the PB metric scope in the config and saves it.
+     pub fn set_pb_scope(&mut self, scope: PbMetricScope) -> Result<(), ConfigError> {
+         self.config.pb_metric_scope = scope;
+         self.save_config()
+     }
+
      /// Sets the PB notification preference in the config and saves it. (Feature 4)
      pub fn set_pb_notification(&mut self, enabled: bool) -> Result<(), ConfigError> {
          self.config.notify_on_pb = Some(enabled);
@@ -113,6 +120,14 @@ impl AppService {
      pub fn check_pb_notification_config(&self) -> Result<bool, ConfigError> {
          self.config.notify_on_pb.ok_or(ConfigError::PbNotificationNotSet)
      }
+
+    pub fn set_units(&mut self, units: Units) -> Result<(), ConfigError> {
+        self.config.units = units;
+        // Potentially add logic here later to convert existing weights if desired,
+        // but for now, just change the unit label.
+        self.save_config()?;
+        Ok(())
+    }
 
     // --- Database Path ---
     pub fn get_db_path(&self) -> &Path {
@@ -386,15 +401,19 @@ impl AppService {
          let mut pb_info: Option<PBInfo> = None;
          let mut is_weight_pb = false;
          let mut is_reps_pb = false;
-
-         if let Some(current_weight) = final_weight {
-              if current_weight > 0.0 && current_weight > previous_max_weight.unwrap_or(0.0) {
-                  is_weight_pb = true;
-              }
+         // Check weight PB only if scope allows (Feature 2)
+         if self.config.pb_metric_scope == PbMetricScope::All || self.config.pb_metric_scope == PbMetricScope::Weight {
+             if let Some(current_weight) = final_weight {
+                 if current_weight > 0.0 && current_weight > previous_max_weight.unwrap_or(0.0) {
+                     is_weight_pb = true;
+                 }
+             }
          }
-         if let Some(current_reps) = reps {
-             if current_reps > 0 && current_reps > previous_max_reps.unwrap_or(0) {
-                  is_reps_pb = true;
+         if self.config.pb_metric_scope == PbMetricScope::All || self.config.pb_metric_scope == PbMetricScope::Reps {
+             if let Some(current_reps) = reps {
+                 if current_reps > 0 && current_reps > previous_max_reps.unwrap_or(0) {
+                     is_reps_pb = true;
+                 }
              }
          }
 
@@ -504,6 +523,26 @@ impl AppService {
          db::list_workouts_for_exercise_on_nth_last_day(&self.conn, &canonical_name, n)
              .map_err(|e| anyhow::Error::new(e)) // Convert DbError to anyhow::Error
              .with_context(|| format!("Failed to list workouts for exercise '{}' on nth last day {}", canonical_name, n))
+     }
+     pub fn calculate_daily_volume(&self, filters: VolumeFilters) -> Result<Vec<(NaiveDate, String, f64)>> {
+         // Resolve exercise identifier filter to canonical name if present
+         let canonical_exercise_name = match filters.exercise_name {
+             Some(ident) => Some(self.resolve_identifier_to_canonical_name(ident)?
+                               .ok_or_else(|| {
+                                    eprintln!("Warning: Exercise identifier '{}' not found for filtering volume.", ident);
+                                    DbError::ExerciseNotFound(ident.to_string())
+                                })?),
+             None => None,
+         };
+ 
+         // Create new filters struct with resolved name
+         let resolved_filters = VolumeFilters {
+             exercise_name: canonical_exercise_name.as_deref(),
+             ..filters // Copy other filters (dates, type, muscle, limit)
+         };
+ 
+         db::calculate_daily_volume_filtered(&self.conn, resolved_filters)
+             .context("Failed to calculate workout volume from database")
      }
 
 }

@@ -1,13 +1,14 @@
 mod cli; // Keep cli module for parsing args
 
 use anyhow::{bail, Context, Result};
-use chrono::{Utc, Duration}; // Keep Duration if needed, remove if not
+use chrono::{Utc, Duration, NaiveDate}; // Keep Duration if needed, remove if not
 use comfy_table::{presets::UTF8_FULL, Cell, Color, ContentArrangement, Table};
 use std::io::{stdin, Write}; // For prompts
+use std::collections::HashMap;
 
 use workout_tracker_lib::{
     AppService, ConfigError, ExerciseDefinition, ExerciseType, Units, Workout, WorkoutFilters,
-    PBInfo, PBType, // Import PB types
+    PBInfo, PBType, VolumeFilters, PbMetricScope // Import PB types
 };
 
 fn main() -> Result<()> {
@@ -199,6 +200,38 @@ fn main() -> Result<()> {
                 Err(e) => bail!("Error listing workouts: {}", e),
              }
         }
+        cli::Commands::Volume {
+            exercise, date, type_, muscle, limit_days, start_date, end_date,
+        } => {
+            // Use explicit date if provided, otherwise use range or limit
+            let (eff_start_date, eff_end_date) = if let Some(d) = date {
+                 (Some(d), Some(d)) // Filter for a single specific day
+            } else {
+                 (start_date, end_date) // Use provided range or None
+            };
+
+            let db_type_filter = type_.map(cli_type_to_db_type);
+            let effective_limit = if eff_start_date.is_none() && eff_end_date.is_none() { Some(limit_days) } else { None };
+
+            let filters = VolumeFilters {
+                exercise_name: exercise.as_deref(),
+                start_date: eff_start_date,
+                end_date: eff_end_date,
+                exercise_type: db_type_filter,
+                muscle: muscle.as_deref(),
+                limit_days: effective_limit,
+            };
+
+            match service.calculate_daily_volume(filters) {
+                Ok(volume_data) if volume_data.is_empty() => {
+                    println!("No workout volume found matching the criteria.");
+                }
+                Ok(volume_data) => {
+                     print_volume_table(volume_data, service.config.units);
+                }
+                Err(e) => bail!("Error calculating workout volume: {}", e),
+            }
+        }
         cli::Commands::ListExercises { type_, muscle } => {
             let db_type_filter = type_.map(cli_type_to_db_type);
             match service.list_exercises(db_type_filter, muscle.as_deref()) {
@@ -235,6 +268,19 @@ fn main() -> Result<()> {
                 Err(e) => bail!("Error listing aliases: {}", e),
             }
         }
+        cli::Commands::SetUnits { units } => { // Feature 3
+            let db_units = match units {
+                cli::UnitsCli::Metric => Units::Metric,
+                cli::UnitsCli::Imperial => Units::Imperial,
+            };
+            match service.set_units(db_units) {
+                Ok(()) => {
+                    println!("Successfully set default units to: {:?}", db_units);
+                    println!("Config file updated: {:?}", service.get_config_path());
+                }
+                Err(e) => bail!("Error setting units: {}", e),
+             }
+         }
         // --- Config/Path Commands ---
         cli::Commands::DbPath => {
             println!("Database file is located at: {:?}", service.get_db_path());
@@ -481,3 +527,32 @@ fn print_alias_table(aliases: std::collections::HashMap<String, String>) {
     println!("{table}");
 }
 
+fn print_volume_table(volume_data: Vec<(NaiveDate, String, f64)>, units: Units) {
+    let mut table = Table::new();
+    let header_color = workout_tracker_lib::parse_color("Yellow") // Use a different color for volume
+        .map(Color::from)
+        .unwrap_or(Color::Yellow);
+
+    let weight_unit_str = match units {
+        Units::Metric => "kg",
+        Units::Imperial => "lbs",
+    };
+
+    table
+        .load_preset(UTF8_FULL)
+        .set_content_arrangement(ContentArrangement::Dynamic)
+        .set_header(vec![
+            Cell::new("Date").fg(header_color),
+            Cell::new("Exercises").fg(header_color),
+            Cell::new(format!("Volume (Sets*Reps*Weight {})", weight_unit_str)).fg(header_color),
+        ]);
+
+    for (date, exercise_name, volume) in volume_data { // Destructure tuple
+        table.add_row(vec![
+            Cell::new(date.format("%Y-%m-%d")),
+            Cell::new(exercise_name), // Added exercise name cell
+            Cell::new(format!("{:.2}", volume)),
+        ]);
+    }
+    println!("{table}");
+}

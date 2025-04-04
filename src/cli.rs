@@ -1,6 +1,6 @@
 // src/cli.rs
 use clap::{Parser, Subcommand, ValueEnum};
-use chrono::{NaiveDate, Utc, Duration, DateTime}; // Import DateTime
+use chrono::{NaiveDate, Utc, Duration}; 
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "A CLI tool to track workouts", long_about = None)]
@@ -18,7 +18,7 @@ pub enum ExerciseTypeCli {
 }
 
 // Custom parser for date strings and shorthands
-fn parse_date_shorthand(s: &str) -> Result<NaiveDate, String> {
+pub fn parse_date_shorthand(s: &str) -> Result<NaiveDate, String> {
     match s.to_lowercase().as_str() {
         "today" => Ok(Utc::now().date_naive()),
         "yesterday" => Ok((Utc::now() - Duration::days(1)).date_naive()),
@@ -220,10 +220,48 @@ pub enum Commands {
         /// Enable PB notifications (`true` or `false`)
         enabled: bool,
     },
-    // Maybe add a command to set units later: SetUnits { units: UnitsCli }
+    /// Show total workout volume (sets*reps*weight) per day
+    Volume { // Feature 1
+        /// Filter by exercise Name, ID or Alias
+        #[arg(short = 'e', long)]
+        exercise: Option<String>,
+
+        /// Filter by a specific date ('today', 'yesterday', YYYY-MM-DD, DD.MM.YYYY, Weekday Name)
+        #[arg(long, value_parser = parse_date_shorthand, conflicts_with_all = &["start_date", "end_date", "limit_days"])] // Corrected conflicts
+        date: Option<NaiveDate>,
+
+        /// Filter by exercise type
+        #[arg(short = 't', long, value_enum)]
+        type_: Option<ExerciseTypeCli>,
+
+        /// Filter by target muscle (matches if muscle is in the list)
+        #[arg(short, long)]
+        muscle: Option<String>,
+
+        /// Show only the last N days with workouts (when no date/range filters used)
+        #[arg(short = 'n', long, default_value_t = 7, conflicts_with_all = &["date", "start_date", "end_date"])] // Corrected conflicts
+        limit_days: u32,
+
+        // Optional date range
+        #[arg(long, value_parser = parse_date_shorthand, conflicts_with_all = &["date", "limit_days"])] // Corrected conflicts
+        start_date: Option<NaiveDate>,
+        #[arg(long, value_parser = parse_date_shorthand, conflicts_with_all = &["date", "limit_days"], requires="start_date")] // Corrected conflicts and added requires
+        end_date: Option<NaiveDate>,
+    },
+    /// Set default units (Metric/Imperial)
+    SetUnits { // Feature 3
+        #[arg(value_enum)]
+        units: UnitsCli,
+     },
 }
 
 // Function to parse CLI arguments
 pub fn parse_args() -> Cli {
     Cli::parse()
+}
+
+#[derive(ValueEnum, Clone, Debug, PartialEq, Eq)]
+pub enum UnitsCli {
+    Metric,
+    Imperial,
 }

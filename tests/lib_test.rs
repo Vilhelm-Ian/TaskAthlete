@@ -3,6 +3,7 @@ use chrono::{Utc, Duration, NaiveDate}; // Import NaiveDate
 use workout_tracker_lib::{
     AppService, Config, ConfigError, DbError, ExerciseType, Units, 
     WorkoutFilters,
+    VolumeFilters, PBInfo, PBType, PbMetricScope,
 };
 use std::thread; // For adding delays in PB tests
 use std::time::Duration as StdDuration; // For delays
@@ -226,47 +227,78 @@ fn test_edit_workout_date() -> Result<()> {
 }
 
 
-// TODO
-// #[test]
-// fn test_pb_detection() -> Result<()> {
-//     let mut service = create_test_service()?;
-//     service.create_exercise("Deadlift", ExerciseType::Resistance, Some("back,legs"))?;
-//     let today = Utc::now().date_naive();
+#[test]
+fn test_pb_detection_with_scope() -> Result<()> {
+    let mut service = create_test_service()?;
+    service.create_exercise("Deadlift", ExerciseType::Resistance, Some("back,legs"))?;
+    let today = Utc::now().date_naive();
 
-//     // Workout 1: Establish baseline
-//     let (_, pb1) = service.add_workout("Deadlift", today, Some(1), Some(5), Some(100.0), None, None, None, None, None)?;
-//     assert!(pb1.is_none(), "First workout shouldn't be a PB"); // PB relative to previous entries
+    // --- Scope: All ---
+    service.set_pb_scope(PbMetricScope::All)?;
 
-//     thread::sleep(StdDuration::from_millis(10)); // Ensure timestamp differs slightly
+    // Workout 1: Baseline
+    let (_, pb1) = service.add_workout("Deadlift", today, Some(1), Some(5), Some(100.0), None, None, None, None, None)?;
+    assert!(pb1.is_none(), "Scope All: First workout shouldn't be a PB");
+    thread::sleep(StdDuration::from_millis(10));
 
-//     // Workout 2: Higher weight PB
-//     let (_, pb2) = service.add_workout("Deadlift", today, Some(1), Some(3), Some(110.0), None, None, None, None, None)?;
-//     assert!(pb2.is_some(), "Should detect weight PB");
-//     assert_eq!(pb2, Some(PBInfo { pb_type: PBType::Weight, new_weight: Some(110.0), previous_weight: Some(100.0), new_reps: None, previous_reps: None }));
+    // Workout 2: Weight PB
+    let (_, pb2) = service.add_workout("Deadlift", today, Some(1), Some(3), Some(110.0), None, None, None, None, None)?;
+    assert!(pb2.is_some(), "Scope All: Should detect weight PB");
+    assert_eq!(pb2.as_ref().unwrap().pb_type, PBType::Weight);
+    assert_eq!(pb2.as_ref().unwrap().new_weight, Some(110.0));
+    thread::sleep(StdDuration::from_millis(10));
 
-//     thread::sleep(StdDuration::from_millis(10));
+    // Workout 3: Reps PB
+    let (_, pb3) = service.add_workout("Deadlift", today, Some(3), Some(6), Some(90.0), None, None, None, None, None)?;
+    assert!(pb3.is_some(), "Scope All: Should detect reps PB");
+    assert_eq!(pb3.as_ref().unwrap().pb_type, PBType::Reps);
+    assert_eq!(pb3.as_ref().unwrap().new_reps, Some(6));
+    thread::sleep(StdDuration::from_millis(10));
 
-//     // Workout 3: Higher reps PB (at lower weight)
-//     let (_, pb3) = service.add_workout("Deadlift", today, Some(3), Some(6), Some(90.0), None, None, None, None, None)?;
-//     assert!(pb3.is_some(), "Should detect reps PB");
-//     assert_eq!(pb3, Some(PBInfo { pb_type: PBType::Reps, new_weight: None, previous_weight: None, new_reps: Some(6), previous_reps: Some(5) })); // Max reps was 5 previously
+     // Workout 4: Both PB
+    let (_, pb4) = service.add_workout("Deadlift", today, Some(1), Some(7), Some(120.0), None, None, None, None, None)?;
+    assert!(pb4.is_some(), "Scope All: Should detect both PB");
+    assert_eq!(pb4.as_ref().unwrap().pb_type, PBType::Both);
+    assert_eq!(pb4.as_ref().unwrap().new_weight, Some(120.0));
+    assert_eq!(pb4.as_ref().unwrap().new_reps, Some(7));
+    thread::sleep(StdDuration::from_millis(10));
 
-//     thread::sleep(StdDuration::from_millis(10));
+    // Workout 5: No PB
+    let (_, pb5) = service.add_workout("Deadlift", today, Some(5), Some(5), Some(105.0), None, None, None, None, None)?;
+    assert!(pb5.is_none(), "Scope All: Should not detect PB");
+    thread::sleep(StdDuration::from_millis(10));
 
-//     // Workout 4: Both weight and reps PB
-//     let (_, pb4) = service.add_workout("Deadlift", today, Some(1), Some(7), Some(120.0), None, None, None, None, None)?;
-//     assert!(pb4.is_some(), "Should detect both PB");
-//      assert_eq!(pb4, Some(PBInfo { pb_type: PBType::Both, new_weight: Some(120.0), previous_weight: Some(110.0), new_reps: Some(7), previous_reps: Some(6) }));
+    // --- Scope: Weight Only ---
+    service.set_pb_scope(PbMetricScope::Weight)?;
 
-//     thread::sleep(StdDuration::from_millis(10));
+    // Workout 6: Weight PB (should be detected)
+    let (_, pb6) = service.add_workout("Deadlift", today, Some(1), Some(4), Some(130.0), None, None, None, None, None)?;
+    assert!(pb6.is_some(), "Scope Weight: Should detect weight PB");
+    assert_eq!(pb6.as_ref().unwrap().pb_type, PBType::Weight);
+    assert_eq!(pb6.as_ref().unwrap().new_weight, Some(130.0));
+    thread::sleep(StdDuration::from_millis(10));
 
-//     // Workout 5: No PB (lower weight and reps than max)
-//     let (_, pb5) = service.add_workout("Deadlift", today, Some(5), Some(5), Some(105.0), None, None, None, None, None)?;
-//     assert!(pb5.is_none(), "Should not detect PB");
+    // Workout 7: Reps PB (should NOT be detected as PB)
+    let (_, pb7) = service.add_workout("Deadlift", today, Some(1), Some(8), Some(125.0), None, None, None, None, None)?;
+    assert!(pb7.is_none(), "Scope Weight: Should NOT detect reps PB");
+    thread::sleep(StdDuration::from_millis(10));
 
-//     Ok(())
-// }
+    // --- Scope: Reps Only ---
+    service.set_pb_scope(PbMetricScope::Reps)?;
 
+    // Workout 8: Reps PB (should be detected)
+    let (_, pb8) = service.add_workout("Deadlift", today, Some(1), Some(9), Some(110.0), None, None, None, None, None)?;
+    assert!(pb8.is_some(), "Scope Reps: Should detect reps PB");
+    assert_eq!(pb8.as_ref().unwrap().pb_type, PBType::Reps);
+    assert_eq!(pb8.as_ref().unwrap().new_reps, Some(9));
+    thread::sleep(StdDuration::from_millis(10));
+
+    // Workout 9: Weight PB (should NOT be detected as PB)
+    let (_, pb9) = service.add_workout("Deadlift", today, Some(1), Some(5), Some(140.0), None, None, None, None, None)?;
+    assert!(pb9.is_none(), "Scope Reps: Should NOT detect weight PB");
+
+    Ok(())
+}
 
 
 #[test]
@@ -645,6 +677,89 @@ fn test_bodyweight_validation() -> Result<()> {
         ConfigError::InvalidBodyweightInput(_) => (),
         _ => panic!("Expected InvalidBodyweightInput error"),
     }
+
+    Ok(())
+}
+
+#[test]
+fn test_set_units() -> Result<()> {
+    let mut service = create_test_service()?;
+    assert_eq!(service.config.units, Units::Metric);
+
+    // Set to Imperial
+    service.set_units(Units::Imperial)?;
+    assert_eq!(service.config.units, Units::Imperial);
+
+    // Set back to Metric
+    service.set_units(Units::Metric)?;
+    assert_eq!(service.config.units, Units::Metric);
+
+    Ok(())
+}
+
+// Test Workout Volume Calculation (Feature 1)
+#[test]
+fn test_workout_volume() -> Result<()> {
+    let mut service = create_test_service()?;
+    let day1 = NaiveDate::from_ymd_opt(2023, 10, 26).unwrap();
+    let day2 = NaiveDate::from_ymd_opt(2023, 10, 27).unwrap();
+
+    service.create_exercise("Bench Press", ExerciseType::Resistance, Some("chest"))?;
+    service.create_exercise("Pull-ups", ExerciseType::BodyWeight, Some("back"))?; // BW with added weight
+    service.create_exercise("Running", ExerciseType::Cardio, Some("legs"))?;
+    service.create_exercise("Squats", ExerciseType::Resistance, Some("legs"))?;
+
+    // Day 1 Workouts
+    // Entry 1: Bench Press
+    service.add_workout("Bench Press", day1, Some(3), Some(10), Some(100.0), None, None, None, None, None)?; // Vol = 3*10*100 = 3000
+    // Entry 2: Bench Press (another set)
+    service.add_workout("Bench Press", day1, Some(1), Some(8), Some(105.0), None, None, None, None, None)?; // Vol = 1*8*105 = 840
+    // Entry 3: Pullups (Bodyweight 70kg + 10kg)
+    service.add_workout("Pull-ups", day1, Some(4), Some(6), Some(10.0), None, None, None, None, Some(70.0))?; // Vol = 4*6*(70+10) = 1920
+     // Entry 4: Running (Cardio - should have 0 volume)
+    service.add_workout("Running", day1, None, None, None, Some(30), None, None, None, None)?; // Vol = 0
+
+    // Day 2 Workouts
+    service.add_workout("Squats", day2, Some(5), Some(5), Some(120.0), None, None, None, None, None)?; // Vol = 5*5*120 = 3000
+    service.add_workout("Bench Press", day2, Some(4), Some(6), Some(100.0), None, None, None, None, None)?; // Vol = 4*6*100 = 2400
+
+    // --- Test Volume Calculation ---
+
+    // Total volume per day (no filters, default limit)
+    let volume_all = service.calculate_daily_volume(VolumeFilters::default())?;
+    assert_eq!(volume_all.len(), 2); // Day 1 and Day 2
+    // Day 2 should be first (most recent)
+    assert_eq!(volume_all[0].0, day2);
+    assert!((volume_all[0].1 - (3000.0 + 2400.0)).abs() < 0.01); // Day 2 Total = 5400
+    assert_eq!(volume_all[1].0, day1);
+    assert!((volume_all[1].1 - (3000.0 + 840.0 + 1920.0 + 0.0)).abs() < 0.01); // Day 1 Total = 5760
+
+    // Volume for Day 1 only
+    let volume_day1 = service.calculate_daily_volume(VolumeFilters {
+        start_date: Some(day1), end_date: Some(day1), ..Default::default()
+    })?;
+    assert_eq!(volume_day1.len(), 1);
+    assert_eq!(volume_day1[0].0, day1);
+    assert!((volume_day1[0].1 - 5760.0).abs() < 0.01);
+
+    // Volume for "Bench Press" only
+    let volume_bp = service.calculate_daily_volume(VolumeFilters {
+        exercise_name: Some("Bench Press"), ..Default::default()
+    })?;
+    assert_eq!(volume_bp.len(), 2);
+     // Day 2 BP
+    assert_eq!(volume_bp[0].0, day2);
+    assert!((volume_bp[0].1 - 2400.0).abs() < 0.01);
+    // Day 1 BP
+    assert_eq!(volume_bp[1].0, day1);
+    assert!((volume_bp[1].1 - (3000.0 + 840.0)).abs() < 0.01); // Sum of both BP entries
+
+    // Volume for Cardio (should be 0)
+    let volume_cardio = service.calculate_daily_volume(VolumeFilters {
+        exercise_type: Some(ExerciseType::Cardio), ..Default::default()
+    })?;
+    // Check if day1 exists and volume is 0, or if the vec is empty (if no other cardio days)
+    assert!(volume_cardio.is_empty() || (volume_cardio[0].0 == day1 && volume_cardio[0].1 == 0.0));
 
     Ok(())
 }

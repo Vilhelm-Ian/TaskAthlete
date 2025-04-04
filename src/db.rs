@@ -40,6 +40,62 @@ impl fmt::Display for ExerciseType {
     }
 }
 
+#[derive(Default, Debug)]
+pub struct VolumeFilters<'a> {
+    pub exercise_name: Option<&'a str>, // Canonical name expected
+    pub start_date: Option<NaiveDate>,
+    pub end_date: Option<NaiveDate>,
+    pub exercise_type: Option<ExerciseType>,
+    pub muscle: Option<&'a str>,
+    pub limit_days: Option<u32>, // Limit number of distinct days returned
+}
+
+pub fn calculate_daily_volume_filtered(
+    conn: &Connection,
+    filters: VolumeFilters,
+) -> Result<Vec<(NaiveDate, String, f64)>, DbError> {
+    // Base query calculates volume per workout *entry*
+    let mut sql = "
+        SELECT
+            date(w.timestamp) as workout_date,
+            w.exercise_name, -- Select the exercise name
+            SUM(CASE
+                    WHEN e.type IN ('resistance', 'body-weight')
+                    THEN COALESCE(w.sets, 1) * COALESCE(w.reps, 0) * COALESCE(w.weight, 0)
+                    ELSE 0 -- Define volume as 0 for Cardio or other types
+                END) as daily_volume
+        FROM workouts w
+        LEFT JOIN exercises e ON w.exercise_name = e.name
+        WHERE 1=1".to_string();
+
+    let mut params_map: HashMap<String, Box<dyn ToSql>> = HashMap::new();
+
+    if let Some(name) = filters.exercise_name { sql.push_str(" AND w.exercise_name = :ex_name COLLATE NOCASE"); params_map.insert(":ex_name".into(), Box::new(name.to_string())); }
+    if let Some(start) = filters.start_date { sql.push_str(" AND date(w.timestamp) >= date(:start_date)"); params_map.insert(":start_date".into(), Box::new(start.format("%Y-%m-%d").to_string())); }
+    if let Some(end) = filters.end_date { sql.push_str(" AND date(w.timestamp) <= date(:end_date)"); params_map.insert(":end_date".into(), Box::new(end.format("%Y-%m-%d").to_string())); }
+    if let Some(ex_type) = filters.exercise_type { sql.push_str(" AND e.type = :ex_type"); params_map.insert(":ex_type".into(), Box::new(ex_type.to_string())); }
+    if let Some(m) = filters.muscle { sql.push_str(" AND e.muscles LIKE :muscle"); params_map.insert(":muscle".into(), Box::new(format!("%{}%", m))); }
+
+    sql.push_str(" GROUP BY workout_date, w.exercise_name ORDER BY workout_date DESC, w.exercise_name ASC");
+
+    if filters.start_date.is_none() && filters.end_date.is_none() { // Apply limit only if no date range specified
+        if let Some(limit) = filters.limit_days { sql.push_str(" LIMIT :limit"); params_map.insert(":limit".into(), Box::new(limit)); }
+    }
+
+    let params_for_query: Vec<(&str, &dyn ToSql)> = params_map.iter().map(|(k, v)| (k.as_str(), v.as_ref())).collect();
+
+    let mut stmt = conn.prepare(&sql).map_err(DbError::QueryFailed)?;
+    let volume_iter = stmt.query_map(params_for_query.as_slice(), |row| {
+        let date_str: String = row.get(0)?;
+        let date = NaiveDate::parse_from_str(&date_str, "%Y-%m-%d").map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?;
+        let exercise_name: String = row.get(1)?; // Get exercise name
+        let volume: f64 = row.get(2)?; // Volume is now the 3rd column (index 2)
+        Ok((date, exercise_name, volume))
+    }).map_err(DbError::QueryFailed)?;
+
+    volume_iter.collect::<Result<Vec<_>, _>>().map_err(DbError::QueryFailed)
+}
+
 #[derive(Debug)]
 pub struct Workout {
     pub id: i64,

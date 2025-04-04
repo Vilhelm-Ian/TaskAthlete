@@ -1,7 +1,7 @@
 bodyweight = 70.0
 units = "metric"
 prompt_for_bodyweight = true
-notify_on_pb = true
+pb_metric_scope = "all"
 
 [theme]
 header_color = "Green"

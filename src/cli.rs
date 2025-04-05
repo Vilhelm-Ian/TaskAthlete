@@ -1,6 +1,7 @@
+//src/cli.rs
 // src/cli.rs
 use clap::{Parser, Subcommand, ValueEnum, CommandFactory};
-use chrono::{NaiveDate, Utc, Duration}; 
+use chrono::{NaiveDate, Utc, Duration};
 use clap_complete::Shell;
 
 #[derive(Parser, Debug)]
@@ -102,6 +103,10 @@ pub enum Commands {
         #[arg(short = 'd', long)] // Added short alias
         duration: Option<i64>,
 
+        /// Distance covered (e.g., km, miles)
+        #[arg(short = 'l', long)] // Use 'l' for distance (length)
+        distance: Option<f64>,
+
         /// Additional notes about the workout
         #[arg(short, long)]
         notes: Option<String>,
@@ -136,6 +141,9 @@ pub enum Commands {
         /// New duration in minutes
         #[arg(short = 'd', long)] // Added short alias
         duration: Option<i64>,
+        /// New distance covered (e.g., km, miles)
+        #[arg(short = 'l', long)] // Use 'l' for distance
+        distance: Option<f64>,
         /// New additional notes
         #[arg(short, long)]
         notes: Option<String>,
@@ -193,6 +201,12 @@ pub enum Commands {
         #[arg(short='m', long)] // short 'm'
         muscle: Option<String>,
     },
+     /// Show statistics for a specific exercise
+     Stats {
+        /// Name, ID, or Alias of the exercise to show stats for
+        #[arg(short = 'e', long)]
+        exercise: String,
+    },
     /// Create an alias for an existing exercise
     Alias { // Feature 1
         /// The alias name (e.g., "bp") - Must be unique
@@ -216,10 +230,36 @@ pub enum Commands {
         /// Your current bodyweight
         weight: f64
     },
-    /// Enable or disable Personal Best (PB) notifications
+    /// Enable or disable Personal Best (PB) notifications globally
     SetPbNotification { // Feature 4
         /// Enable PB notifications (`true` or `false`)
         enabled: bool,
+    },
+     /// Enable or disable Personal Best (PB) notifications for Weight
+     SetPbNotifyWeight {
+        /// Enable weight PB notifications (`true` or `false`)
+        enabled: bool,
+    },
+    /// Enable or disable Personal Best (PB) notifications for Reps
+    SetPbNotifyReps {
+        /// Enable reps PB notifications (`true` or `false`)
+        enabled: bool,
+    },
+    /// Enable or disable Personal Best (PB) notifications for Duration
+    SetPbNotifyDuration {
+        /// Enable duration PB notifications (`true` or `false`)
+        enabled: bool,
+    },
+    /// Enable or disable Personal Best (PB) notifications for Distance
+    SetPbNotifyDistance {
+        /// Enable distance PB notifications (`true` or `false`)
+        enabled: bool,
+    },
+    /// Set the interval in days for calculating streaks
+    SetStreakInterval {
+        /// Number of days allowed between workouts to maintain a streak (e.g., 1 for daily, 2 for every other day)
+        #[arg(value_parser = clap::value_parser!(u32).range(1..))] // Ensure at least 1 day
+        days: u32,
     },
     /// Show total workout volume (sets*reps*weight) per day
     Volume { // Feature 1
@@ -277,3 +317,84 @@ pub enum UnitsCli {
 }
 
 
+
+#[cfg(test)]
+mod tests {
+    use super::*; // Import items from the parent module (cli)
+    use chrono::{NaiveDate, Utc, Duration};
+
+    #[test]
+    fn test_date_parsing_today() {
+        let result = parse_date_shorthand("today").unwrap();
+        let today = Utc::now().date_naive();
+        assert_eq!(result, today);
+    }
+
+    #[test]
+    fn test_date_parsing_yesterday() {
+        let result = parse_date_shorthand("yesterday").unwrap();
+        let yesterday = Utc::now().date_naive() - Duration::days(1);
+        assert_eq!(result, yesterday);
+    }
+
+    #[test]
+    fn test_date_parsing_yyyy_mm_dd() {
+        let result = parse_date_shorthand("2023-10-27").unwrap();
+        assert_eq!(result, NaiveDate::from_ymd_opt(2023, 10, 27).unwrap());
+    }
+
+    #[test]
+    fn test_date_parsing_dd_mm_yyyy() {
+        let result = parse_date_shorthand("27.10.2023").unwrap();
+        assert_eq!(result, NaiveDate::from_ymd_opt(2023, 10, 27).unwrap());
+    }
+
+    #[test]
+    fn test_date_parsing_yyyy_slash_mm_dd() {
+        let result = parse_date_shorthand("2023/10/27").unwrap();
+        assert_eq!(result, NaiveDate::from_ymd_opt(2023, 10, 27).unwrap());
+    }
+
+
+    #[test]
+    fn test_date_parsing_case_insensitive() {
+        let result_today = parse_date_shorthand("ToDaY").unwrap();
+        let today = Utc::now().date_naive();
+        assert_eq!(result_today, today);
+
+        let result_yesterday = parse_date_shorthand("yEsTeRdAy").unwrap();
+        let yesterday = Utc::now().date_naive() - Duration::days(1);
+        assert_eq!(result_yesterday, yesterday);
+    }
+
+    #[test]
+    fn test_date_parsing_invalid_format() {
+        let result = parse_date_shorthand("27-10-2023");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid date format"));
+
+        let result = parse_date_shorthand("October 27, 2023");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid date format"));
+
+        let result = parse_date_shorthand("invalid-date");
+         assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid date format"));
+    }
+
+    #[test]
+    fn test_date_parsing_invalid_date() {
+        // Valid format, invalid date
+        let result = parse_date_shorthand("2023-02-30"); // February 30th doesn't exist
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid date format")); // Our parser returns this generic message
+
+         let result = parse_date_shorthand("32.10.2023");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid date format"));
+
+         let result = parse_date_shorthand("2023/13/01");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid date format"));
+    }
+}

@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc}; // Add TimeZone
+use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc, Duration}; // Add Duration, TimeZone
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 use std::collections::HashMap; // For list_aliases return type
@@ -10,7 +10,7 @@ pub mod db;
 
 // --- Expose public types ---
 pub use config::{
-    Config, ConfigError, ThemeConfig, Units, StandardColor, parse_color, PbMetricScope,
+    Config, ConfigError, ThemeConfig, Units, StandardColor, parse_color, // PbMetricScope removed
     get_config_path as get_config_path_util, // Rename utility function
     load_config as load_config_util,         // Rename utility function
     save_config as save_config_util,         // Rename utility function
@@ -22,20 +22,61 @@ pub use db::{
 };
 
 // --- Personal Best Information (Feature 4) ---
-#[derive(Debug, Clone, PartialEq)]
-pub enum PBType {
-    Weight,
-    Reps,
-    Both,
+// Replaced PBType with boolean flags within PBInfo
+// #[derive(Debug, Clone, PartialEq)]
+// pub enum PBType {
+//     Weight,
+//     Reps,
+//     Duration,
+//     Distance,
+//     // Combinations could be added if needed, but individual flags are simpler
+// }
+
+#[derive(Debug, Clone, PartialEq, Default)] // Add Default
+pub struct PBInfo {
+    pub achieved_weight_pb: bool,
+    pub new_weight: Option<f64>,
+    pub previous_weight: Option<f64>,
+    pub achieved_reps_pb: bool,
+    pub new_reps: Option<i64>,
+    pub previous_reps: Option<i64>,
+    pub achieved_duration_pb: bool,
+    pub new_duration: Option<i64>,
+    pub previous_duration: Option<i64>,
+    pub achieved_distance_pb: bool,
+    pub new_distance: Option<f64>,    // Stored as km
+    pub previous_distance: Option<f64>, // Stored as km
+}
+
+impl PBInfo {
+    /// Helper to check if any PB was achieved.
+    pub fn any_pb(&self) -> bool {
+        self.achieved_weight_pb || self.achieved_reps_pb || self.achieved_duration_pb || self.achieved_distance_pb
+    }
+}
+
+// --- Statistics Types ---
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct PersonalBests {
+    pub max_weight: Option<f64>,
+    pub max_reps: Option<i64>,
+    pub max_duration_minutes: Option<i64>,
+    pub max_distance_km: Option<f64>, // Always store in km
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct PBInfo {
-    pub pb_type: PBType,
-    pub new_weight: Option<f64>,
-    pub previous_weight: Option<f64>,
-    pub new_reps: Option<i64>,
-    pub previous_reps: Option<i64>,
+pub struct ExerciseStats {
+    pub canonical_name: String,
+    pub total_workouts: usize,
+    pub first_workout_date: Option<NaiveDate>,
+    pub last_workout_date: Option<NaiveDate>,
+    pub avg_workouts_per_week: Option<f64>,
+    pub longest_gap_days: Option<u64>,
+    pub personal_bests: PersonalBests,
+    pub current_streak: u32,
+    pub longest_streak: u32,
+    pub streak_interval_days: u32, // From config
 }
 
 
@@ -59,10 +100,10 @@ impl AppService {
             .context(format!("Failed to load config from {:?}", config_path))?;
 
         let db_path = db::get_db_path().context("Failed to determine database path")?;
-        let conn = db::open_db(&db_path)
+        let mut conn = db::open_db(&db_path) // Use mutable conn for init potentially
             .with_context(|| format!("Failed to open database at {:?}", db_path))?;
 
-        db::init_db(&conn).context("Failed to initialize database schema")?;
+        db::init_db(&mut conn).context("Failed to initialize database schema")?; // Pass mutable conn
 
         Ok(Self {
             config,
@@ -104,26 +145,50 @@ impl AppService {
          self.save_config()
      }
 
-     /// Sets the PB metric scope in the config and saves it.
-     pub fn set_pb_scope(&mut self, scope: PbMetricScope) -> Result<(), ConfigError> {
-         self.config.pb_metric_scope = scope;
+     /// Sets the streak interval in the config and saves it.
+     pub fn set_streak_interval(&mut self, days: u32) -> Result<(), ConfigError> {
+         if days == 0 {
+             // Although CLI parser prevents 0, add safeguard here
+             return Err(ConfigError::InvalidBodyweightInput("Streak interval must be at least 1 day.".to_string()));
+         }
+         self.config.streak_interval_days = days;
          self.save_config()
      }
 
-     /// Sets the PB notification preference in the config and saves it. (Feature 4)
-     pub fn set_pb_notification(&mut self, enabled: bool) -> Result<(), ConfigError> {
-         self.config.notify_on_pb = Some(enabled);
+     // --- PB Notification Config Methods ---
+
+     /// Sets the global PB notification preference in the config and saves it.
+     pub fn set_pb_notification_enabled(&mut self, enabled: bool) -> Result<(), ConfigError> {
+         self.config.notify_pb_enabled = Some(enabled);
          self.save_config()
      }
 
-     /// Checks the PB notification config setting. Returns error if not set. (Feature 4)
+     /// Checks the global PB notification config setting. Returns error if not set (needs prompt).
      pub fn check_pb_notification_config(&self) -> Result<bool, ConfigError> {
-         self.config.notify_on_pb.ok_or(ConfigError::PbNotificationNotSet)
+         self.config.notify_pb_enabled.ok_or(ConfigError::PbNotificationNotSet)
      }
 
+     pub fn set_pb_notify_weight(&mut self, enabled: bool) -> Result<(), ConfigError> {
+         self.config.notify_pb_weight = enabled;
+         self.save_config()
+     }
+     pub fn set_pb_notify_reps(&mut self, enabled: bool) -> Result<(), ConfigError> {
+         self.config.notify_pb_reps = enabled;
+         self.save_config()
+     }
+     pub fn set_pb_notify_duration(&mut self, enabled: bool) -> Result<(), ConfigError> {
+         self.config.notify_pb_duration = enabled;
+         self.save_config()
+     }
+     pub fn set_pb_notify_distance(&mut self, enabled: bool) -> Result<(), ConfigError> {
+         self.config.notify_pb_distance = enabled;
+         self.save_config()
+     }
+
+    // --- Units Config ---
     pub fn set_units(&mut self, units: Units) -> Result<(), ConfigError> {
         self.config.units = units;
-        // Potentially add logic here later to convert existing weights if desired,
+        // Potentially add logic here later to convert existing weights/distances if desired,
         // but for now, just change the unit label.
         self.save_config()?;
         Ok(())
@@ -214,6 +279,7 @@ impl AppService {
              DbError::ExerciseNameNotUnique(failed_name) => {
                   anyhow::anyhow!("Failed to rename exercise: the name '{}' is already taken.", failed_name)
              }
+             DbError::ExerciseNotFound(_) => anyhow::anyhow!("Exercise '{}' not found to edit.", identifier), // Make not found error specific
              _ => anyhow::Error::new(db_err).context(format!("Failed to update exercise '{}' in database", identifier))
         })
     }
@@ -243,8 +309,13 @@ impl AppService {
         }
 
         // 3. Call DB function to delete exercise and its aliases (using canonical name)
-        db::delete_exercise(&mut self.conn, &canonical_name)
-            .context(format!("Failed to delete exercise '{}' from database", canonical_name))
+        // Need mutable connection borrow for the transaction inside db::delete_exercise
+        let mut_conn = &mut self.conn; // Create a mutable reference
+        db::delete_exercise(mut_conn, &canonical_name)
+            .map_err(|e| match e {
+                DbError::ExerciseNotFound(_) => anyhow::anyhow!("Exercise '{}' not found to delete.", identifier), // Should not happen if resolve worked, but handle anyway
+                _ => anyhow::Error::new(e).context(format!("Failed to delete exercise '{}' from database", canonical_name)),
+            })
     }
 
 
@@ -314,15 +385,17 @@ impl AppService {
     // --- Workout Entry Methods ---
 
     /// Adds a workout entry. Handles implicit exercise creation, bodyweight logic, past dates, and PB checking.
+    /// Stores distance in km.
     /// Returns Result<(workout_id, Option<PBInfo>)>
     pub fn add_workout(
         &mut self, // Needs mut because bodyweight prompt might update config via caller
         exercise_identifier: &str,
-        date: NaiveDate, 
+        date: NaiveDate,
         sets: Option<i64>,
         reps: Option<i64>,
         weight_arg: Option<f64>, // Weight from CLI/TUI args
         duration: Option<i64>,
+        distance_arg: Option<f64>, // Distance from CLI/TUI args
         notes: Option<String>,
         // For implicit creation:
         implicit_type: Option<ExerciseType>,
@@ -374,17 +447,32 @@ impl AppService {
              weight_arg // Use the provided weight directly for non-bodyweight exercises
         };
 
-        // 3. Determine timestamp (Feature 3)
+        // 3. Convert distance to km if necessary and store
+        let final_distance_km = match distance_arg {
+            Some(dist) => {
+                match self.config.units {
+                    Units::Metric => Some(dist), // Assume input is already km
+                    Units::Imperial => Some(dist * 1.60934), // Convert miles to km
+                }
+            }
+            None => None,
+        };
+
+
+        // 4. Determine timestamp (Feature 3)
         // Use noon UTC on the given date to represent the day without time specifics
-        let date_and_time = NaiveDateTime::from(date);
+        let date_and_time = date.and_hms_opt(12, 0, 0)
+                                .ok_or_else(|| anyhow::anyhow!("Internal error creating NaiveDateTime from date"))?;
         let timestamp = Utc.from_utc_datetime(&date_and_time);
 
-         // 4. Check for PBs *before* adding the new workout (Feature 4)
+         // 5. Check for PBs *before* adding the new workout (Feature 4)
          let previous_max_weight = db::get_max_weight_for_exercise(&self.conn, &canonical_exercise_name)?;
          let previous_max_reps = db::get_max_reps_for_exercise(&self.conn, &canonical_exercise_name)?;
+         let previous_max_duration = db::get_max_duration_for_exercise(&self.conn, &canonical_exercise_name)?;
+         let previous_max_distance_km = db::get_max_distance_for_exercise(&self.conn, &canonical_exercise_name)?;
 
 
-        // 5. Add the workout entry using the canonical exercise name, final weight, and timestamp
+        // 6. Add the workout entry using the canonical exercise name, final weight, distance(km), and timestamp
         let inserted_id = db::add_workout(
             &self.conn,
             &canonical_exercise_name, // Use canonical name
@@ -393,43 +481,60 @@ impl AppService {
             reps,
             final_weight, // Use calculated weight
             duration,
+            final_distance_km, // Store distance in km
             notes,
         )
         .context("Failed to add workout to database")?;
 
-         // 6. Determine if a PB was achieved (Feature 4)
-         let mut pb_info: Option<PBInfo> = None;
-         let mut is_weight_pb = false;
-         let mut is_reps_pb = false;
-         // Check weight PB only if scope allows (Feature 2)
-         if self.config.pb_metric_scope == PbMetricScope::All || self.config.pb_metric_scope == PbMetricScope::Weight {
+         // 7. Determine if a PB was achieved (Feature 4)
+         let mut pb_info = PBInfo {
+            previous_weight:previous_max_weight, previous_reps: previous_max_reps, previous_duration: previous_max_duration, previous_distance: previous_max_distance_km,
+            new_weight: final_weight, new_reps: reps, new_duration: duration, new_distance: final_distance_km,
+            ..Default::default() // Initialize achieved flags to false
+         };
+
+         // Check weight PB
+         if self.config.notify_pb_weight {
              if let Some(current_weight) = final_weight {
                  if current_weight > 0.0 && current_weight > previous_max_weight.unwrap_or(0.0) {
-                     is_weight_pb = true;
+                     pb_info.achieved_weight_pb = true;
                  }
              }
          }
-         if self.config.pb_metric_scope == PbMetricScope::All || self.config.pb_metric_scope == PbMetricScope::Reps {
-             if let Some(current_reps) = reps {
-                 if current_reps > 0 && current_reps > previous_max_reps.unwrap_or(0) {
-                     is_reps_pb = true;
-                 }
-             }
+         // Check reps PB
+         if self.config.notify_pb_reps {
+              if let Some(current_reps) = reps {
+                  if current_reps > 0 && current_reps > previous_max_reps.unwrap_or(0) {
+                      pb_info.achieved_reps_pb = true;
+                  }
+              }
+         }
+         // Check duration PB
+         if self.config.notify_pb_duration {
+              if let Some(current_duration) = duration {
+                  if current_duration > 0 && current_duration > previous_max_duration.unwrap_or(0) {
+                      pb_info.achieved_duration_pb = true;
+                  }
+              }
+         }
+          // Check distance PB
+         if self.config.notify_pb_distance {
+              if let Some(current_distance_km) = final_distance_km {
+                  // Use a small epsilon for float comparison? Might be overkill for distance PBs.
+                  if current_distance_km > 0.0 && current_distance_km > previous_max_distance_km.unwrap_or(0.0) {
+                       pb_info.achieved_distance_pb = true;
+                  }
+              }
          }
 
-         if is_weight_pb && is_reps_pb {
-             pb_info = Some(PBInfo { pb_type: PBType::Both, new_weight: final_weight, previous_weight: previous_max_weight, new_reps: reps, previous_reps: previous_max_reps });
-         } else if is_weight_pb {
-             pb_info = Some(PBInfo { pb_type: PBType::Weight, new_weight: final_weight, previous_weight: previous_max_weight, new_reps: None, previous_reps: None });
-         } else if is_reps_pb {
-             pb_info = Some(PBInfo { pb_type: PBType::Reps, new_weight: None, previous_weight: None, new_reps: reps, previous_reps: previous_max_reps });
-         }
 
-        Ok((inserted_id, pb_info)) // Return ID and optional PB info
+         // Return ID and PB info only if a PB was actually achieved
+        let result_pb_info = if pb_info.any_pb() { Some(pb_info) } else { None };
+        Ok((inserted_id, result_pb_info))
     }
 
 
-    /// Edits an existing workout entry.
+    /// Edits an existing workout entry. Converts distance to km if units are Imperial.
     pub fn edit_workout(
         &self,
         id: i64,
@@ -438,6 +543,7 @@ impl AppService {
         new_reps: Option<i64>,
         new_weight: Option<f64>, // Weight is set directly, no bodyweight logic re-applied
         new_duration: Option<i64>,
+        new_distance_arg: Option<f64>, // Distance argument from CLI/TUI
         new_notes: Option<String>,
         new_date: Option<NaiveDate>, // Feature 3: Allow editing date
     ) -> Result<u64> {
@@ -456,6 +562,17 @@ impl AppService {
             None => None,
         };
 
+        // Convert distance to km if necessary
+        let new_distance_km = match new_distance_arg {
+            Some(dist) => {
+                match self.config.units {
+                    Units::Metric => Some(dist), // Assume input is already km
+                    Units::Imperial => Some(dist * 1.60934), // Convert miles to km
+                }
+            }
+            None => None,
+        };
+
         // Call function from db module
         db::update_workout(
             &self.conn,
@@ -465,6 +582,7 @@ impl AppService {
             new_reps,
             new_weight, // Pass Option<f64> directly
             new_duration,
+            new_distance_km, // Pass Option<f64> (km)
             new_notes.as_deref(), // Pass Option<&str>
             new_timestamp, // Pass Option<DateTime<Utc>>
         )
@@ -490,7 +608,7 @@ impl AppService {
                                .ok_or_else(|| {
                                     // If identifier doesn't resolve, treat as no matching workouts found
                                     eprintln!("Warning: Exercise identifier '{}' not found for filtering.", ident);
-                                    DbError::ExerciseNotFound(ident.to_string()) // Or return Ok(vec![])? Let's error.
+                                    DbError::ExerciseNotFound(ident.to_string()) // Return specific error
                                })?),
              None => None,
         };
@@ -524,6 +642,117 @@ impl AppService {
              .map_err(|e| anyhow::Error::new(e)) // Convert DbError to anyhow::Error
              .with_context(|| format!("Failed to list workouts for exercise '{}' on nth last day {}", canonical_name, n))
      }
+
+     // --- Statistics Method ---
+     pub fn get_exercise_stats(&self, exercise_identifier: &str) -> Result<ExerciseStats> {
+        // 1. Resolve identifier
+        let canonical_name = self.resolve_identifier_to_canonical_name(exercise_identifier)?
+            .ok_or_else(|| DbError::ExerciseNotFound(exercise_identifier.to_string()))?;
+
+        // 2. Get all timestamps for the exercise
+        let timestamps = db::get_workout_timestamps_for_exercise(&self.conn, &canonical_name)
+            .context(format!("Failed to retrieve workout history for '{}'", canonical_name))?;
+
+        if timestamps.is_empty() {
+            return Err(DbError::NoWorkoutDataFound(canonical_name).into());
+        }
+
+        // 3. Calculate basic stats
+        let total_workouts = timestamps.len();
+        let first_timestamp = timestamps.first().unwrap(); // Safe due to is_empty check
+        let last_timestamp = timestamps.last().unwrap();   // Safe due to is_empty check
+        let first_workout_date = Some(first_timestamp.date_naive());
+        let last_workout_date = Some(last_timestamp.date_naive());
+
+        // 4. Calculate average workouts per week
+        let avg_workouts_per_week = if total_workouts <= 1 {
+            None // Cannot calculate average for 0 or 1 workout
+        } else {
+            let duration_days = (*last_timestamp - *first_timestamp).num_days();
+            if duration_days == 0 {
+                 // Multiple workouts on the same day - technically infinite avg/week, return None or handle differently?
+                 // Let's consider it as "at least daily" which doesn't fit avg/week well. Return None.
+                None
+            } else {
+                let duration_weeks = (duration_days as f64 / 7.0).max(1.0 / 7.0); // Avoid division by zero, ensure at least 1 day = 1/7 week
+                Some(total_workouts as f64 / duration_weeks)
+            }
+        };
+
+
+        // 5. Calculate longest gap
+        let mut longest_gap_days: Option<u64> = None;
+        if total_workouts > 1 {
+            let mut max_gap: i64 = 0;
+            for i in 1..total_workouts {
+                let gap = (timestamps[i].date_naive() - timestamps[i - 1].date_naive()).num_days();
+                if gap > max_gap {
+                    max_gap = gap;
+                }
+            }
+             longest_gap_days = Some(max_gap as u64); // Convert to u64
+        }
+
+        // 6. Calculate streaks
+        let streak_interval = Duration::days(self.config.streak_interval_days as i64);
+        let mut current_streak = 0u32;
+        let mut longest_streak = 0u32;
+
+        if total_workouts > 0 {
+            current_streak = 1; // Start with 1 for the first workout
+            longest_streak = 1;
+            let mut last_streak_date = timestamps[0].date_naive();
+
+            for i in 1..total_workouts {
+                let current_date = timestamps[i].date_naive();
+                // Ignore multiple workouts on the same day for streak calculation
+                if current_date == last_streak_date {
+                     continue;
+                }
+                // Check if the gap is within the allowed interval
+                if current_date - last_streak_date <= streak_interval {
+                    current_streak += 1;
+                } else {
+                    // Streak broken, reset current streak
+                    current_streak = 1;
+                }
+                // Update longest streak if current is longer
+                if current_streak > longest_streak {
+                    longest_streak = current_streak;
+                }
+                last_streak_date = current_date; // Update the date for the next comparison
+            }
+
+            // Check if the *current* streak is still active based on the last workout date and today
+            let today = Utc::now().date_naive();
+            if today - last_timestamp.date_naive() > streak_interval {
+                current_streak = 0; // Current streak is broken if the last workout is too old
+            }
+        }
+
+
+        // 7. Get Personal Bests
+        let personal_bests = PersonalBests {
+            max_weight: db::get_max_weight_for_exercise(&self.conn, &canonical_name)?,
+            max_reps: db::get_max_reps_for_exercise(&self.conn, &canonical_name)?,
+            max_duration_minutes: db::get_max_duration_for_exercise(&self.conn, &canonical_name)?,
+            max_distance_km: db::get_max_distance_for_exercise(&self.conn, &canonical_name)?,
+        };
+
+        Ok(ExerciseStats {
+            canonical_name,
+            total_workouts,
+            first_workout_date,
+            last_workout_date,
+            avg_workouts_per_week,
+            longest_gap_days,
+            personal_bests,
+            current_streak,
+            longest_streak,
+            streak_interval_days: self.config.streak_interval_days,
+        })
+    }
+
      pub fn calculate_daily_volume(&self, filters: VolumeFilters) -> Result<Vec<(NaiveDate, String, f64)>> {
          // Resolve exercise identifier filter to canonical name if present
          let canonical_exercise_name = match filters.exercise_name {
@@ -534,13 +763,13 @@ impl AppService {
                                 })?),
              None => None,
          };
- 
+
          // Create new filters struct with resolved name
          let resolved_filters = VolumeFilters {
              exercise_name: canonical_exercise_name.as_deref(),
              ..filters // Copy other filters (dates, type, muscle, limit)
          };
- 
+
          db::calculate_daily_volume_filtered(&self.conn, resolved_filters)
              .context("Failed to calculate workout volume from database")
      }

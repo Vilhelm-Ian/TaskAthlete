@@ -1,34 +1,50 @@
 use anyhow::Result;
 use chrono::{Utc, Duration, NaiveDate}; // Import NaiveDate
 use workout_tracker_lib::{
-    AppService, Config, ConfigError, DbError, ExerciseType, Units, 
-    WorkoutFilters,
-    VolumeFilters, PBInfo, PBType, PbMetricScope,
+    AppService, Config, ConfigError, DbError, ExerciseType, Units,
+    WorkoutFilters, VolumeFilters, PBInfo, // Removed PBType
+    ExerciseStats, PersonalBests // Removed PbMetricScope, added stats types
 };
 use std::thread; // For adding delays in PB tests
 use std::time::Duration as StdDuration; // For delays
+use rusqlite::Connection; // For mutable connection helper
 
 
 // Helper function to create a test service with in-memory database
 fn create_test_service() -> Result<AppService> {
     // Create an in-memory database for testing
-    let conn = rusqlite::Connection::open_in_memory()?;
-    workout_tracker_lib::db::init_db(&conn)?;
+    // Need a mutable connection to pass to init_db
+    let mut conn = rusqlite::Connection::open_in_memory()?;
+    workout_tracker_lib::db::init_db(&mut conn)?; // Pass mutable conn
 
     // Create a default config for testing
     let config = Config {
         bodyweight: Some(70.0), // Set a default bodyweight for tests
         units: Units::Metric,
         prompt_for_bodyweight: true,
+        notify_pb_enabled: Some(true), // Explicitly enable for most tests
+        streak_interval_days: 1,       // Default streak interval
+        notify_pb_weight: true,
+        notify_pb_reps: true,
+        notify_pb_duration: true,
+        notify_pb_distance: true,
         ..Default::default()
     };
 
     Ok(AppService {
         config,
-        conn,
+        conn, // Store the initialized connection
         db_path: ":memory:".into(),
         config_path: "test_config.toml".into(),
     })
+}
+
+// Helper to get a separate mutable connection for tests requiring transactions (like edit_exercise)
+// This is a bit of a hack because AppService owns its connection.
+fn create_mutable_conn_to_test_db() -> Result<Connection> {
+     let mut conn = rusqlite::Connection::open_in_memory()?;
+     workout_tracker_lib::db::init_db(&mut conn)?; // Ensure schema is initialized
+     Ok(conn)
 }
 
 
@@ -74,7 +90,7 @@ fn test_exercise_aliases() -> Result<()> {
      // 4. Try creating duplicate alias
      let result = service.create_alias("bp", "Squat"); // Different exercise, same alias
      assert!(result.is_err());
-     println!("{:?}",result);
+     // println!("{:?}",result); // Keep for debugging if needed
      assert!(result.unwrap_err().to_string().contains("Alias already exists"));
 
      // 5. Try creating alias conflicting with name/id
@@ -89,7 +105,9 @@ fn test_exercise_aliases() -> Result<()> {
 
     // 6. Use Alias in Add Workout
     let today = Utc::now().date_naive();
-    let (workout_id, _) = service.add_workout("bp", today, Some(3), Some(5), Some(100.0), None, None, None, None, None)?;
+    let (workout_id, _) = service.add_workout(
+        "bp", today, Some(3), Some(5), Some(100.0), None, None, None, None, None, None
+    )?;
     let workouts = service.list_workouts(WorkoutFilters{ exercise_name: Some("bp"), ..Default::default() })?;
     assert_eq!(workouts.len(), 1);
     assert_eq!(workouts[0].id, workout_id);
@@ -110,48 +128,67 @@ fn test_exercise_aliases() -> Result<()> {
     Ok(())
 }
 
-// TODO
-// #[test]
-// fn test_edit_exercise_with_alias_and_name_change() -> Result<()> {
-//     // Need mutable connection for the transaction in db::update_exercise
-//     // AppService doesn't hold mut conn, so create one separately
-//     let mut service = create_test_service()?; // Setup schema and initial data via service
-//     let mut conn = create_mutable_conn_to_test_db()?; // Get a mutable connection
+// Test for editing exercise name and having aliases/workouts update
+#[test]
+fn test_edit_exercise_with_alias_and_name_change() -> Result<()> {
+    let mut service = create_test_service()?; // Service owns its connection
 
-//     service.create_exercise("Old Name", ExerciseType::Resistance, Some("muscle1"))?;
-//     service.create_alias("on", "Old Name")?;
+    service.create_exercise("Old Name", ExerciseType::Resistance, Some("muscle1"))?;
+    service.create_alias("on", "Old Name")?;
 
-//     // Add a workout using alias
-//     let today = Utc::now().date_naive();
-//     service.add_workout("on", today, Some(1), Some(1), Some(1.0), None, None, None, None, None)?;
+    // Add a workout using the alias
+    let today = Utc::now().date_naive();
+    service.add_workout("on", today, Some(1), Some(1), Some(1.0), None, None, None, None, None, None)?;
 
-//     // Edit using alias, change name
-//     // Use the separate mutable connection for the update operation
-//     let canonical_name = service.resolve_identifier_to_canonical_name("on")?.unwrap();
-//     workout_tracker_lib::db::update_exercise(
-//         &mut conn, // Pass the mutable connection
-//         &canonical_name,
-//         Some("New Name"),
-//         None,
-//         Some(Some("muscle1,muscle2")),
-//     )?;
+    // Edit using the alias identifier, changing the name and muscles
+    service.edit_exercise(
+        "on", // Identify by alias
+        Some("New Name"),
+        None, // Keep type
+        Some(Some("muscle1,muscle2")), // Change muscles
+    )?;
 
-//     // Verify changes using service (which uses its own immutable connection)
-//     // Check old alias points to new name (DB function handles this)
-//     let aliases = service.list_aliases()?;
-//     assert_eq!(aliases.get("on").unwrap(), "New Name");
+    // --- Verification using the same service instance ---
 
-//     // Check definition update
-//     let new_def = service.resolve_exercise_identifier("on")?.unwrap();
-//     assert_eq!(new_def.name, "New Name");
-//     assert_eq!(new_def.muscles, Some("muscle1,muscle2".to_string()));
+    // 1. Check old name resolves to None
+    assert!(service.resolve_exercise_identifier("Old Name")?.is_none());
 
-//     // Check workout entry was updated
-//     let workouts = service.list_workouts(WorkoutFilters { exercise_name: Some("on"), ..Default::default() })?;
-//     assert_eq!(workouts[0].exercise_name, "New Name");
+    // 2. Check alias now points to the new definition
+    let resolved_by_alias = service.resolve_exercise_identifier("on")?.expect("Alias 'on' should resolve");
+    assert_eq!(resolved_by_alias.name, "New Name");
+    assert_eq!(resolved_by_alias.muscles, Some("muscle1,muscle2".to_string()));
 
-//     Ok(())
-// }
+    // 3. Check new name resolves correctly
+    let resolved_by_new_name = service.resolve_exercise_identifier("New Name")?.expect("'New Name' should resolve");
+    assert_eq!(resolved_by_new_name.id, resolved_by_alias.id); // Ensure same exercise ID
+    assert_eq!(resolved_by_new_name.name, "New Name");
+    assert_eq!(resolved_by_new_name.muscles, Some("muscle1,muscle2".to_string()));
+
+    // 4. Check the alias list still contains the alias pointing to the NEW name
+    let aliases = service.list_aliases()?;
+    assert_eq!(aliases.get("on").expect("Alias 'on' should exist"), "New Name");
+
+    // 5. Check the workout entry associated with the old name was updated
+    //    List workouts using the *alias* which should now resolve to "New Name"
+    let workouts = service.list_workouts(WorkoutFilters { exercise_name: Some("on"), ..Default::default() })?;
+    assert_eq!(workouts.len(), 1, "Should find one workout via alias");
+    assert_eq!(workouts[0].exercise_name, "New Name", "Workout exercise name should be updated");
+
+    //    List workouts using the *new name*
+    let workouts_new_name = service.list_workouts(WorkoutFilters { exercise_name: Some("New Name"), ..Default::default() })?;
+    assert_eq!(workouts_new_name.len(), 1, "Should find one workout via new name");
+    assert_eq!(workouts_new_name[0].id, workouts[0].id, "Workout IDs should match");
+
+    //    List workouts using the *old name* (should find none)
+     let workouts_old_name = service.list_workouts(WorkoutFilters { exercise_name: Some("Old Name"), ..Default::default() });
+      // Expect ExerciseNotFound error because the filter tries to resolve "Old Name" which no longer exists
+    assert!(workouts_old_name.is_err());
+    assert!(workouts_old_name.unwrap_err().downcast_ref::<DbError>().map_or(false, |e| matches!(e, DbError::ExerciseNotFound(_))));
+
+
+    Ok(())
+}
+
 
 #[test]
 fn test_delete_exercise_with_alias() -> Result<()> {
@@ -182,8 +219,8 @@ fn test_add_workout_past_date() -> Result<()> {
     let yesterday = Utc::now().date_naive() - Duration::days(1);
     let two_days_ago = Utc::now().date_naive() - Duration::days(2);
 
-    service.add_workout("Rowing", yesterday, None, None, None, Some(30), None, None, None, None)?;
-    service.add_workout("Rowing", two_days_ago, None, None, None, Some(25), None, None, None, None)?;
+    service.add_workout("Rowing", yesterday, None, None, None, Some(30), None, None, None, None, None)?;
+    service.add_workout("Rowing", two_days_ago, None, None, None, Some(25), None, None, None, None, None)?;
 
     // List for yesterday
     let workouts_yesterday = service.list_workouts(WorkoutFilters{ date: Some(yesterday), ..Default::default() })?;
@@ -208,10 +245,10 @@ fn test_edit_workout_date() -> Result<()> {
     let today = Utc::now().date_naive();
     let yesterday = today - Duration::days(1);
 
-    let (workout_id, _) = service.add_workout("Push-ups", today, Some(3), Some(15), None, None, None, None, None, Some(70.0))?;
+    let (workout_id, _) = service.add_workout("Push-ups", today, Some(3), Some(15), None, None, None, None, None, None, Some(70.0))?;
 
     // Edit the date
-    service.edit_workout(workout_id, None, None, None, None, None, None, Some(yesterday))?;
+    service.edit_workout(workout_id, None, None, None, None, None, None, None, Some(yesterday))?;
 
     // Verify date change by listing
     let workouts_today = service.list_workouts(WorkoutFilters{ date: Some(today), ..Default::default() })?;
@@ -227,75 +264,109 @@ fn test_edit_workout_date() -> Result<()> {
 }
 
 
+// Updated PB test to reflect new PBInfo structure and separate config flags
 #[test]
-fn test_pb_detection_with_scope() -> Result<()> {
-    let mut service = create_test_service()?;
+fn test_pb_detection_and_config() -> Result<()> {
+    let mut service = create_test_service()?; // Uses default config with all PBs enabled
     service.create_exercise("Deadlift", ExerciseType::Resistance, Some("back,legs"))?;
+    service.create_exercise("Running", ExerciseType::Cardio, Some("legs"))?;
     let today = Utc::now().date_naive();
 
-    // --- Scope: All ---
-    service.set_pb_scope(PbMetricScope::All)?;
+    // --- Test Default Config (All PBs Enabled) ---
 
     // Workout 1: Baseline
-    let (_, pb1) = service.add_workout("Deadlift", today, Some(1), Some(5), Some(100.0), None, None, None, None, None)?;
-    assert!(pb1.is_none(), "Scope All: First workout shouldn't be a PB");
+    let (_, pb1) = service.add_workout("Deadlift", today, Some(1), Some(5), Some(100.0), None, None, None, None, None, None)?;
+    assert!(pb1.is_none(), "First workout shouldn't be a PB");
     thread::sleep(StdDuration::from_millis(10));
 
     // Workout 2: Weight PB
-    let (_, pb2) = service.add_workout("Deadlift", today, Some(1), Some(3), Some(110.0), None, None, None, None, None)?;
-    assert!(pb2.is_some(), "Scope All: Should detect weight PB");
-    assert_eq!(pb2.as_ref().unwrap().pb_type, PBType::Weight);
-    assert_eq!(pb2.as_ref().unwrap().new_weight, Some(110.0));
+    let (_, pb2) = service.add_workout("Deadlift", today, Some(1), Some(3), Some(110.0), None, None, None, None, None, None)?;
+    assert!(pb2.is_some(), "Should detect weight PB");
+    let info2 = pb2.unwrap();
+    assert!(info2.achieved_weight_pb);
+    assert!(!info2.achieved_reps_pb);
+    assert_eq!(info2.new_weight, Some(110.0));
+    assert_eq!(info2.previous_weight, Some(100.0)); // Previous was 100
     thread::sleep(StdDuration::from_millis(10));
 
     // Workout 3: Reps PB
-    let (_, pb3) = service.add_workout("Deadlift", today, Some(3), Some(6), Some(90.0), None, None, None, None, None)?;
-    assert!(pb3.is_some(), "Scope All: Should detect reps PB");
-    assert_eq!(pb3.as_ref().unwrap().pb_type, PBType::Reps);
-    assert_eq!(pb3.as_ref().unwrap().new_reps, Some(6));
+    let (_, pb3) = service.add_workout("Deadlift", today, Some(3), Some(6), Some(90.0), None, None, None, None, None, None)?;
+    assert!(pb3.is_some(), "Should detect reps PB");
+    let info3 = pb3.unwrap();
+    assert!(!info3.achieved_weight_pb);
+    assert!(info3.achieved_reps_pb);
+    assert_eq!(info3.new_reps, Some(6));
+    assert_eq!(info3.previous_reps, Some(5)); // Previous was 5
     thread::sleep(StdDuration::from_millis(10));
 
-     // Workout 4: Both PB
-    let (_, pb4) = service.add_workout("Deadlift", today, Some(1), Some(7), Some(120.0), None, None, None, None, None)?;
-    assert!(pb4.is_some(), "Scope All: Should detect both PB");
-    assert_eq!(pb4.as_ref().unwrap().pb_type, PBType::Both);
-    assert_eq!(pb4.as_ref().unwrap().new_weight, Some(120.0));
-    assert_eq!(pb4.as_ref().unwrap().new_reps, Some(7));
+     // Workout 4: Both Weight and Reps PB
+    let (_, pb4) = service.add_workout("Deadlift", today, Some(1), Some(7), Some(120.0), None, None, None, None, None, None)?;
+    assert!(pb4.is_some(), "Should detect both PBs");
+    let info4 = pb4.unwrap();
+    assert!(info4.achieved_weight_pb);
+    assert!(info4.achieved_reps_pb);
+    assert_eq!(info4.new_weight, Some(120.0));
+    assert_eq!(info4.previous_weight, Some(110.0)); // Previous was 110
+    assert_eq!(info4.new_reps, Some(7));
+    assert_eq!(info4.previous_reps, Some(6)); // Previous was 6
     thread::sleep(StdDuration::from_millis(10));
 
     // Workout 5: No PB
-    let (_, pb5) = service.add_workout("Deadlift", today, Some(5), Some(5), Some(105.0), None, None, None, None, None)?;
-    assert!(pb5.is_none(), "Scope All: Should not detect PB");
+    let (_, pb5) = service.add_workout("Deadlift", today, Some(5), Some(5), Some(105.0), None, None, None, None, None, None)?;
+    assert!(pb5.is_none(), "Should not detect PB");
     thread::sleep(StdDuration::from_millis(10));
 
-    // --- Scope: Weight Only ---
-    service.set_pb_scope(PbMetricScope::Weight)?;
+    // --- Test Disabling Specific PBs ---
+    service.set_pb_notify_reps(false)?; // Disable Rep PB notifications
 
     // Workout 6: Weight PB (should be detected)
-    let (_, pb6) = service.add_workout("Deadlift", today, Some(1), Some(4), Some(130.0), None, None, None, None, None)?;
-    assert!(pb6.is_some(), "Scope Weight: Should detect weight PB");
-    assert_eq!(pb6.as_ref().unwrap().pb_type, PBType::Weight);
-    assert_eq!(pb6.as_ref().unwrap().new_weight, Some(130.0));
+    let (_, pb6) = service.add_workout("Deadlift", today, Some(1), Some(4), Some(130.0), None, None, None, None, None, None)?;
+    assert!(pb6.is_some(), "Weight PB should still be detected");
+    assert!(pb6.unwrap().achieved_weight_pb);
     thread::sleep(StdDuration::from_millis(10));
 
-    // Workout 7: Reps PB (should NOT be detected as PB)
-    let (_, pb7) = service.add_workout("Deadlift", today, Some(1), Some(8), Some(125.0), None, None, None, None, None)?;
-    assert!(pb7.is_none(), "Scope Weight: Should NOT detect reps PB");
+    // Workout 7: Reps PB (should NOT be detected as PB *notification*)
+    let (_, pb7) = service.add_workout("Deadlift", today, Some(1), Some(8), Some(125.0), None, None, None, None, None, None)?;
+    assert!(pb7.is_none(), "Reps PB should NOT trigger notification when disabled");
     thread::sleep(StdDuration::from_millis(10));
 
-    // --- Scope: Reps Only ---
-    service.set_pb_scope(PbMetricScope::Reps)?;
+    // --- Test Duration/Distance PBs ---
+    service.set_pb_notify_reps(true)?; // Re-enable reps
+    service.set_pb_notify_weight(false)?; // Disable weight
 
-    // Workout 8: Reps PB (should be detected)
-    let (_, pb8) = service.add_workout("Deadlift", today, Some(1), Some(9), Some(110.0), None, None, None, None, None)?;
-    assert!(pb8.is_some(), "Scope Reps: Should detect reps PB");
-    assert_eq!(pb8.as_ref().unwrap().pb_type, PBType::Reps);
-    assert_eq!(pb8.as_ref().unwrap().new_reps, Some(9));
-    thread::sleep(StdDuration::from_millis(10));
+    // Running Workout 1: Baseline
+     let (_, rpb1) = service.add_workout("Running", today, None, None, None, Some(30), Some(5.0), None, None, None, None)?; // 5km in 30min
+     assert!(rpb1.is_none());
+     thread::sleep(StdDuration::from_millis(10));
 
-    // Workout 9: Weight PB (should NOT be detected as PB)
-    let (_, pb9) = service.add_workout("Deadlift", today, Some(1), Some(5), Some(140.0), None, None, None, None, None)?;
-    assert!(pb9.is_none(), "Scope Reps: Should NOT detect weight PB");
+     // Running Workout 2: Duration PB (longer duration, same distance)
+     let (_, rpb2) = service.add_workout("Running", today, None, None, None, Some(35), Some(5.0), None, None, None, None)?;
+     assert!(rpb2.is_some());
+     let rinfo2 = rpb2.unwrap();
+     assert!(rinfo2.achieved_duration_pb);
+     assert!(!rinfo2.achieved_distance_pb);
+     assert_eq!(rinfo2.new_duration, Some(35));
+     assert_eq!(rinfo2.previous_duration, Some(30));
+     thread::sleep(StdDuration::from_millis(10));
+
+      // Running Workout 3: Distance PB (longer distance, irrelevant duration)
+     let (_, rpb3) = service.add_workout("Running", today, None, None, None, Some(25), Some(6.0), None, None, None, None)?;
+     assert!(rpb3.is_some());
+     let rinfo3 = rpb3.unwrap();
+     assert!(!rinfo3.achieved_duration_pb);
+     assert!(rinfo3.achieved_distance_pb);
+     assert_eq!(rinfo3.new_distance, Some(6.0));
+     assert_eq!(rinfo3.previous_distance, Some(5.0));
+     thread::sleep(StdDuration::from_millis(10));
+
+     // Running Workout 4: Disable distance PB, achieve distance PB -> No notification
+     service.set_pb_notify_distance(false)?;
+     let (_, rpb4) = service.add_workout("Running", today, None, None, None, Some(40), Some(7.0), None, None, None, None)?;
+     assert!(rpb4.is_some(), "Duration PB should still trigger"); // Duration PB is still active
+     let rinfo4 = rpb4.unwrap();
+     assert!(rinfo4.achieved_duration_pb);
+     assert!(!rinfo4.achieved_distance_pb, "Distance PB flag should be false in returned info if notify disabled"); // Flag should reflect config state at time of adding
+
 
     Ok(())
 }
@@ -330,29 +401,47 @@ fn test_create_and_list_exercises() -> Result<()> {
 #[test]
 fn test_pb_config_interaction() -> Result<()> {
     let mut service = create_test_service()?; // PB notifications default to Some(true) here
-    service.set_pb_notification(true)?;
 
-    // Check initial state
+    // Check initial state (global enabled)
     assert_eq!(service.check_pb_notification_config()?, true);
 
-    // Disable PB notifications
-    service.set_pb_notification(false)?;
-    assert_eq!(service.config.notify_on_pb, Some(false));
+    // Disable PB notifications globally
+    service.set_pb_notification_enabled(false)?;
+    assert_eq!(service.config.notify_pb_enabled, Some(false));
     assert_eq!(service.check_pb_notification_config()?, false);
 
-     // Re-enable PB notifications
-     service.set_pb_notification(true)?;
-     assert_eq!(service.config.notify_on_pb, Some(true));
+     // Re-enable PB notifications globally
+     service.set_pb_notification_enabled(true)?;
+     assert_eq!(service.config.notify_pb_enabled, Some(true));
      assert_eq!(service.check_pb_notification_config()?, true);
 
     // Test case where config starts as None (simulate first run)
-    service.config.notify_on_pb = None;
+    service.config.notify_pb_enabled = None;
     let result = service.check_pb_notification_config();
     assert!(result.is_err());
     match result.unwrap_err() {
         ConfigError::PbNotificationNotSet => {}, // Correct error
         _ => panic!("Expected PbNotificationNotSet error"),
     }
+
+    // Test individual metric flags
+    assert!(service.config.notify_pb_weight); // Should be true by default
+    service.set_pb_notify_weight(false)?;
+    assert!(!service.config.notify_pb_weight);
+    service.set_pb_notify_weight(true)?;
+    assert!(service.config.notify_pb_weight);
+
+    assert!(service.config.notify_pb_reps);
+    service.set_pb_notify_reps(false)?;
+    assert!(!service.config.notify_pb_reps);
+
+    assert!(service.config.notify_pb_duration);
+    service.set_pb_notify_duration(false)?;
+    assert!(!service.config.notify_pb_duration);
+
+    assert!(service.config.notify_pb_distance);
+    service.set_pb_notify_distance(false)?;
+    assert!(!service.config.notify_pb_distance);
 
 
     Ok(())
@@ -366,7 +455,7 @@ fn test_list_filter_with_alias() -> Result<()> {
     service.create_alias("ohp", "Overhead Press")?;
     let today = Utc::now().date_naive();
 
-    service.add_workout("ohp", today, Some(5), Some(5), Some(50.0), None, None, None, None, None)?;
+    service.add_workout("ohp", today, Some(5), Some(5), Some(50.0), None, None, None, None, None, None)?;
 
     // Filter list using alias
     let workouts = service.list_workouts(WorkoutFilters { exercise_name: Some("ohp"), ..Default::default() })?;
@@ -383,51 +472,106 @@ fn test_list_filter_with_alias() -> Result<()> {
 
 
 #[test]
-fn test_add_and_list_workouts() -> Result<()> {
+fn test_add_and_list_workouts_with_distance() -> Result<()> {
     let mut service = create_test_service()?;
+    service.config.units = Units::Metric; // Use Metric for easy km verification
 
     // Create an exercise first
-    service.create_exercise("Bench Press", ExerciseType::Resistance, Some("chest"))?;
+    service.create_exercise("Running", ExerciseType::Cardio, Some("legs"))?;
 
     // Add some workouts
+    let date1 = NaiveDate::from_ymd_opt(2015, 6, 2).unwrap();
     service.add_workout(
-        "Bench Press",
-        NaiveDate::from_ymd_opt(2015, 6, 2).unwrap(),
-        Some(3),
-        Some(10),
-        Some(60.0),
-        None,
-        Some("First workout".to_string()),
-        None,
-        None,
-        None,
+        "Running", date1, None, None, None, Some(30), Some(5.0), // 5 km
+        Some("First run".to_string()), None, None, None
     )?;
 
+    let date2 = NaiveDate::from_ymd_opt(2015, 6, 3).unwrap();
     service.add_workout(
-        "Bench Press",
-        NaiveDate::from_ymd_opt(2015, 6, 3).unwrap(),
-        Some(4),
-        Some(8),
-        Some(70.0),
-        None,
-        Some("Second workout".to_string()),
-        None,
-        None,
-        None,
+        "Running", date2, None, None, None, Some(60), Some(10.5), // 10.5 km
+        Some("Second run".to_string()), None, None, None
     )?;
 
     // List workouts
     let workouts = service.list_workouts(WorkoutFilters {
-        exercise_name: Some("Bench Press"),
+        exercise_name: Some("Running"),
         ..Default::default()
     })?;
 
     assert_eq!(workouts.len(), 2);
-    assert_eq!(workouts[0].sets, Some(4)); // Most recent first
-    assert_eq!(workouts[1].sets, Some(3));
+    // Most recent first
+    assert_eq!(workouts[0].timestamp.date_naive(), date2);
+    assert_eq!(workouts[0].duration_minutes, Some(60));
+    assert_eq!(workouts[0].distance, Some(10.5)); // Check distance stored (km)
+
+    assert_eq!(workouts[1].timestamp.date_naive(), date1);
+    assert_eq!(workouts[1].duration_minutes, Some(30));
+    assert_eq!(workouts[1].distance, Some(5.0));
 
     Ok(())
 }
+
+#[test]
+fn test_add_workout_imperial_distance() -> Result<()> {
+    let mut service = create_test_service()?;
+    service.config.units = Units::Imperial; // Set units to Imperial
+
+    service.create_exercise("Cycling", ExerciseType::Cardio, None)?;
+    let today = Utc::now().date_naive();
+
+    let miles_input = 10.0;
+    let expected_km = miles_input * 1.60934;
+
+    service.add_workout(
+        "Cycling", today, None, None, None, Some(45), Some(miles_input), None, None, None, None
+    )?;
+
+    // List workout and check stored distance (should be km)
+    let workouts = service.list_workouts(WorkoutFilters { exercise_name: Some("Cycling"), ..Default::default() })?;
+    assert_eq!(workouts.len(), 1);
+    assert!(workouts[0].distance.is_some());
+    // Compare with tolerance for floating point
+    assert!((workouts[0].distance.unwrap() - expected_km).abs() < 0.001);
+
+    Ok(())
+}
+
+
+#[test]
+fn test_edit_workout_distance() -> Result<()> {
+    let mut service = create_test_service()?;
+    service.config.units = Units::Metric;
+    service.create_exercise("Walking", ExerciseType::Cardio, None)?;
+    let today = Utc::now().date_naive();
+
+    let (workout_id, _) = service.add_workout("Walking", today, None, None, None, Some(60), Some(5.0), None, None, None, None)?;
+
+    // Edit distance
+    let new_distance = 7.5;
+    service.edit_workout(workout_id, None, None, None, None, None, Some(new_distance), None, None)?;
+
+    // Verify
+    let workouts = service.list_workouts(WorkoutFilters { exercise_name: Some("Walking"), ..Default::default() })?;
+    assert_eq!(workouts.len(), 1);
+    assert_eq!(workouts[0].id, workout_id);
+    assert_eq!(workouts[0].distance, Some(new_distance));
+
+    // Edit distance with Imperial units input
+    service.config.units = Units::Imperial;
+    let imperial_input = 2.0; // 2 miles
+    let expected_km_edit = imperial_input * 1.60934;
+    service.edit_workout(workout_id, None, None, None, None, None, Some(imperial_input), None, None)?;
+
+    // Verify stored km
+    let workouts_imperial_edit = service.list_workouts(WorkoutFilters { exercise_name: Some("Walking"), ..Default::default() })?;
+     assert_eq!(workouts_imperial_edit.len(), 1);
+     assert!(workouts_imperial_edit[0].distance.is_some());
+     assert!((workouts_imperial_edit[0].distance.unwrap() - expected_km_edit).abs() < 0.001);
+
+
+    Ok(())
+}
+
 
 #[test]
 fn test_bodyweight_workouts() -> Result<()> {
@@ -445,6 +589,7 @@ fn test_bodyweight_workouts() -> Result<()> {
         Some(10),
         Some(5.0), // Additional weight
         None,
+        None, // No distance
         None,
         None,
         None,
@@ -485,6 +630,12 @@ fn test_edit_exercise() -> Result<()> {
     assert_eq!(exercise.name, "Barbell Bench Press");
     assert_eq!(exercise.muscles, Some("chest,triceps,shoulders".to_string()));
 
+    // Try editing non-existent exercise
+    let edit_result = service.edit_exercise("NonExistent", Some("WontWork"), None, None);
+    assert!(edit_result.is_err());
+    assert!(edit_result.unwrap_err().downcast_ref::<DbError>().map_or(false, |e| matches!(e, DbError::ExerciseNotFound(_))));
+
+
     Ok(())
 }
 
@@ -503,6 +654,12 @@ fn test_delete_exercise() -> Result<()> {
     let exercise = service.get_exercise_by_identifier_service("Bench Press")?;
     assert!(exercise.is_none());
 
+     // Try deleting non-existent exercise
+    let delete_result = service.delete_exercise("NonExistent");
+    assert!(delete_result.is_err());
+    assert!(delete_result.unwrap_err().downcast_ref::<DbError>().map_or(false, |e| matches!(e, DbError::ExerciseNotFound(_))));
+
+
     Ok(())
 }
 
@@ -516,40 +673,36 @@ fn test_workout_filters() -> Result<()> {
 
     // Add workouts on different dates
     // Hack: We can't set the timestamp directly, so we'll add with a small delay
-    service.add_workout(
-        "Running",
-        NaiveDate::from_ymd_opt(2015, 6, 3).unwrap(),
-        None,
-        None,
-        None,
-        Some(30),
-        None,
-        None,
-        None,
-        None,
-    )?;
+    let date1 = NaiveDate::from_ymd_opt(2015, 6, 3).unwrap();
+    service.add_workout("Running", date1, None, None, None, Some(30), Some(5.0), None, None, None, None)?;
+    thread::sleep(StdDuration::from_millis(10)); // Ensure different timestamp
 
-    // Add another workout
-    service.add_workout(
-        "Curl",
-        NaiveDate::from_ymd_opt(2015, 6, 3).unwrap(),
-        None,
-        None,
-        None,
-        Some(45),
-        None,
-        None,
-        None,
-        None,
-    )?;
+    // Add another workout on same date but later time
+    service.add_workout("Curl", date1, Some(3), Some(12), Some(15.0), None, None, None, None, None, None)?;
 
     // Filter by type
-    let resistance_workout = service.list_workouts(WorkoutFilters {
+    let resistance_workouts = service.list_workouts(WorkoutFilters {
         exercise_type: Some(ExerciseType::Resistance),
         ..Default::default()
     })?;
-    assert_eq!(resistance_workout.len(), 1);
-    assert_eq!(resistance_workout[0].duration_minutes, Some(45));
+    assert_eq!(resistance_workouts.len(), 1);
+    assert_eq!(resistance_workouts[0].exercise_name, "Curl");
+    assert_eq!(resistance_workouts[0].reps, Some(12));
+
+    let cardio_workouts = service.list_workouts(WorkoutFilters {
+        exercise_type: Some(ExerciseType::Cardio),
+        ..Default::default()
+    })?;
+    assert_eq!(cardio_workouts.len(), 1);
+    assert_eq!(cardio_workouts[0].exercise_name, "Running");
+     assert_eq!(cardio_workouts[0].distance, Some(5.0));
+
+    // Filter by date
+    let date1_workouts = service.list_workouts(WorkoutFilters {
+        date: Some(date1),
+        ..Default::default()
+    })?;
+    assert_eq!(date1_workouts.len(), 2); // Both workouts were on this date
 
 
     Ok(())
@@ -563,43 +716,41 @@ fn test_nth_last_day_workouts() -> Result<()> {
     service.create_exercise("Squats", ExerciseType::Resistance, Some("legs"))?;
 
     // Add workouts on different dates
-    // First workout (older)
-    service.add_workout(
-        "Squats",
-        NaiveDate::from_ymd_opt(2015, 6, 2).unwrap(),
-        Some(3),
-        Some(10),
-        Some(100.0),
-        None,
-        Some("First workout".to_string()),
-        None,
-        None,
-        None,
-    )?;
+    let date1 = NaiveDate::from_ymd_opt(2015, 6, 2).unwrap();
+    let date2 = NaiveDate::from_ymd_opt(2015, 6, 7).unwrap();
+    let date3 = NaiveDate::from_ymd_opt(2015, 6, 9).unwrap(); // Most recent
 
-    // Second workout (more recent)
-    service.add_workout(
-        "Squats",
-        NaiveDate::from_ymd_opt(2015, 6, 7).unwrap(),
-        Some(5),
-        Some(5),
-        Some(120.0),
-        None,
-        Some("Second workout".to_string()),
-        None,
-        None,
-        None,
-    )?;
+    // Workout 1 (oldest)
+    service.add_workout("Squats", date1, Some(3), Some(10), Some(100.0), None, None, None, None, None, None)?;
+    // Workout 2 (middle)
+    service.add_workout("Squats", date2, Some(5), Some(5), Some(120.0), None, None, None, None, None, None)?;
+     // Workout 3 (most recent)
+    service.add_workout("Squats", date3, Some(4), Some(6), Some(125.0), None, None, None, None, None, None)?;
+
 
     // Get workouts for the most recent day (n=1)
     let recent_workouts = service.list_workouts_for_exercise_on_nth_last_day("Squats", 1)?;
     assert_eq!(recent_workouts.len(), 1);
-    assert_eq!(recent_workouts[0].sets, Some(5));
+    assert_eq!(recent_workouts[0].sets, Some(4));
+    assert_eq!(recent_workouts[0].timestamp.date_naive(), date3);
 
-    // Get workouts for the previous day (n=2)
+    // Get workouts for the second most recent day (n=2)
     let previous_workouts = service.list_workouts_for_exercise_on_nth_last_day("Squats", 2)?;
     assert_eq!(previous_workouts.len(), 1);
-    assert_eq!(previous_workouts[0].sets, Some(3));
+    assert_eq!(previous_workouts[0].sets, Some(5));
+     assert_eq!(previous_workouts[0].timestamp.date_naive(), date2);
+
+     // Get workouts for the third most recent day (n=3)
+    let oldest_workouts = service.list_workouts_for_exercise_on_nth_last_day("Squats", 3)?;
+    assert_eq!(oldest_workouts.len(), 1);
+    assert_eq!(oldest_workouts[0].sets, Some(3));
+    assert_eq!(oldest_workouts[0].timestamp.date_naive(), date1);
+
+
+    // Try getting n=4 (should be empty)
+     let no_workouts = service.list_workouts_for_exercise_on_nth_last_day("Squats", 4)?;
+     assert!(no_workouts.is_empty());
+
 
     Ok(())
 }
@@ -619,6 +770,14 @@ fn test_config_operations() -> Result<()> {
     // Test disabling prompt
     service.disable_bodyweight_prompt()?;
     assert!(!service.config.prompt_for_bodyweight);
+
+    // Test setting streak interval
+    assert_eq!(service.config.streak_interval_days, 1);
+    service.set_streak_interval(3)?;
+    assert_eq!(service.config.streak_interval_days, 3);
+    let interval_result = service.set_streak_interval(0); // Test invalid interval
+    assert!(interval_result.is_err()); // Should fail
+
 
     Ok(())
 }
@@ -640,6 +799,22 @@ fn test_exercise_not_found() -> Result<()> {
         _ => panic!("Expected ExerciseNotFound error"),
     }
 
+    // Try to delete non-existent exercise
+    let result = service.delete_exercise("Non-existent");
+    assert!(result.is_err());
+     match result.unwrap_err().downcast_ref::<DbError>() {
+        Some(DbError::ExerciseNotFound(_)) => (),
+        _ => panic!("Expected ExerciseNotFound error"),
+    }
+
+    // Try to add workout for non-existent exercise without implicit details
+    let result = service.add_workout(
+        "Non-existent", Utc::now().date_naive(), Some(1), Some(1), None, None, None, None, None, None, None
+    );
+     assert!(result.is_err());
+     assert!(result.unwrap_err().to_string().contains("not found. Define it first"));
+
+
     Ok(())
 }
 
@@ -648,13 +823,22 @@ fn test_workout_not_found() -> Result<()> {
     let service = create_test_service()?;
 
     // Try to edit non-existent workout
-    let result = service.edit_workout(999, None, None, None, None, None, None, None);
-    println!("testing {:?}", result);
+    let result = service.edit_workout(999, None, None, None, None, None, None, None, None);
     assert!(result.is_err());
+    match result.unwrap_err().downcast_ref::<DbError>() {
+         Some(DbError::WorkoutNotFound(999)) => (), // Correct error and ID
+         _ => panic!("Expected WorkoutNotFound error with ID 999"),
+    }
+
 
     // Try to delete non-existent workout
     let result = service.delete_workout(999);
     assert!(result.is_err());
+     match result.unwrap_err().downcast_ref::<DbError>() {
+        Some(DbError::WorkoutNotFound(999)) => (), // Correct error and ID
+        _ => panic!("Expected WorkoutNotFound error with ID 999"),
+    }
+
 
     Ok(())
 }
@@ -710,56 +894,172 @@ fn test_workout_volume() -> Result<()> {
     service.create_exercise("Squats", ExerciseType::Resistance, Some("legs"))?;
 
     // Day 1 Workouts
-    // Entry 1: Bench Press
-    service.add_workout("Bench Press", day1, Some(3), Some(10), Some(100.0), None, None, None, None, None)?; // Vol = 3*10*100 = 3000
-    // Entry 2: Bench Press (another set)
-    service.add_workout("Bench Press", day1, Some(1), Some(8), Some(105.0), None, None, None, None, None)?; // Vol = 1*8*105 = 840
-    // Entry 3: Pullups (Bodyweight 70kg + 10kg)
-    service.add_workout("Pull-ups", day1, Some(4), Some(6), Some(10.0), None, None, None, None, Some(70.0))?; // Vol = 4*6*(70+10) = 1920
-     // Entry 4: Running (Cardio - should have 0 volume)
-    service.add_workout("Running", day1, None, None, None, Some(30), None, None, None, None)?; // Vol = 0
+    service.add_workout("Bench Press", day1, Some(3), Some(10), Some(100.0), None, None, None, None, None, None)?; // Vol = 3*10*100 = 3000
+    service.add_workout("Bench Press", day1, Some(1), Some(8), Some(105.0), None, None, None, None, None, None)?; // Vol = 1*8*105 = 840
+    service.add_workout("Pull-ups", day1, Some(4), Some(6), Some(10.0), None, None, None, None, None, Some(70.0))?; // Vol = 4*6*(70+10) = 1920
+    service.add_workout("Running", day1, None, None, None, Some(30), Some(5.0), None, None, None, None)?; // Vol = 0
 
     // Day 2 Workouts
-    service.add_workout("Squats", day2, Some(5), Some(5), Some(120.0), None, None, None, None, None)?; // Vol = 5*5*120 = 3000
-    service.add_workout("Bench Press", day2, Some(4), Some(6), Some(100.0), None, None, None, None, None)?; // Vol = 4*6*100 = 2400
+    service.add_workout("Squats", day2, Some(5), Some(5), Some(120.0), None, None, None, None, None, None)?; // Vol = 5*5*120 = 3000
+    service.add_workout("Bench Press", day2, Some(4), Some(6), Some(100.0), None, None, None, None, None, None)?; // Vol = 4*6*100 = 2400
 
     // --- Test Volume Calculation ---
 
-    // Total volume per day (no filters, default limit)
+    // Total volume per day/exercise (no filters, default limit)
     let volume_all = service.calculate_daily_volume(VolumeFilters::default())?;
-    assert_eq!(volume_all.len(), 2); // Day 1 and Day 2
-    // Day 2 should be first (most recent)
+    // Should return rows per exercise per day, most recent day first
+    // Expected: (day2, Squats, 3000), (day2, Bench Press, 2400), (day1, Bench Press, 3840), (day1, Pull-ups, 1920), (day1, Running, 0)
+    assert_eq!(volume_all.len(), 5);
+
+    // Verify Day 2 data (order within day is by name ASC)
     assert_eq!(volume_all[0].0, day2);
-    assert!((volume_all[0].1 - (3000.0 + 2400.0)).abs() < 0.01); // Day 2 Total = 5400
-    assert_eq!(volume_all[1].0, day1);
-    assert!((volume_all[1].1 - (3000.0 + 840.0 + 1920.0 + 0.0)).abs() < 0.01); // Day 1 Total = 5760
+    assert_eq!(volume_all[0].1, "Bench Press"); // BP comes before Squats alphabetically
+    assert!((volume_all[0].2 - 2400.0).abs() < 0.01);
+    assert_eq!(volume_all[1].0, day2);
+    assert_eq!(volume_all[1].1, "Squats");
+    assert!((volume_all[1].2 - 3000.0).abs() < 0.01);
+
+    // Verify Day 1 data (order within day is by name ASC)
+    assert_eq!(volume_all[2].0, day1);
+    assert_eq!(volume_all[2].1, "Bench Press"); // BP
+    assert!((volume_all[2].2 - (3000.0 + 840.0)).abs() < 0.01); // 3840
+    assert_eq!(volume_all[3].0, day1);
+    assert_eq!(volume_all[3].1, "Pull-ups"); // Pull-ups
+    assert!((volume_all[3].2 - 1920.0).abs() < 0.01);
+    assert_eq!(volume_all[4].0, day1);
+    assert_eq!(volume_all[4].1, "Running"); // Running
+    assert!((volume_all[4].2 - 0.0).abs() < 0.01);
+
 
     // Volume for Day 1 only
     let volume_day1 = service.calculate_daily_volume(VolumeFilters {
         start_date: Some(day1), end_date: Some(day1), ..Default::default()
     })?;
-    assert_eq!(volume_day1.len(), 1);
-    assert_eq!(volume_day1[0].0, day1);
-    assert!((volume_day1[0].1 - 5760.0).abs() < 0.01);
+    assert_eq!(volume_day1.len(), 3); // BP, Pull-ups, Running on day 1
+    // Could check specific values if needed
+
 
     // Volume for "Bench Press" only
     let volume_bp = service.calculate_daily_volume(VolumeFilters {
         exercise_name: Some("Bench Press"), ..Default::default()
     })?;
-    assert_eq!(volume_bp.len(), 2);
+    assert_eq!(volume_bp.len(), 2); // BP on day 1 and day 2
      // Day 2 BP
     assert_eq!(volume_bp[0].0, day2);
-    assert!((volume_bp[0].1 - 2400.0).abs() < 0.01);
+    assert_eq!(volume_bp[0].1, "Bench Press");
+    assert!((volume_bp[0].2 - 2400.0).abs() < 0.01);
     // Day 1 BP
     assert_eq!(volume_bp[1].0, day1);
-    assert!((volume_bp[1].1 - (3000.0 + 840.0)).abs() < 0.01); // Sum of both BP entries
+    assert_eq!(volume_bp[1].1, "Bench Press");
+    assert!((volume_bp[1].2 - 3840.0).abs() < 0.01); // Sum of both BP entries
 
     // Volume for Cardio (should be 0)
     let volume_cardio = service.calculate_daily_volume(VolumeFilters {
         exercise_type: Some(ExerciseType::Cardio), ..Default::default()
     })?;
-    // Check if day1 exists and volume is 0, or if the vec is empty (if no other cardio days)
-    assert!(volume_cardio.is_empty() || (volume_cardio[0].0 == day1 && volume_cardio[0].1 == 0.0));
+     assert_eq!(volume_cardio.len(), 1); // Only Running on day 1
+     assert_eq!(volume_cardio[0].0, day1);
+     assert_eq!(volume_cardio[0].1, "Running");
+     assert_eq!(volume_cardio[0].2, 0.0);
+
+    Ok(())
+}
+
+
+// Test Exercise Statistics Calculation
+#[test]
+fn test_exercise_stats() -> Result<()> {
+    let mut service = create_test_service()?;
+    let day1 = NaiveDate::from_ymd_opt(2023, 10, 20).unwrap(); // Fri
+    let day2 = NaiveDate::from_ymd_opt(2023, 10, 22).unwrap(); // Sun (Gap 1 day -> 2 days total)
+    let day3 = NaiveDate::from_ymd_opt(2023, 10, 23).unwrap(); // Mon (Gap 0 days -> 1 day total)
+    let day4 = NaiveDate::from_ymd_opt(2023, 10, 27).unwrap(); // Fri (Gap 3 days -> 4 days total) - Longest Gap 3
+    let day5 = NaiveDate::from_ymd_opt(2023, 10, 28).unwrap(); // Sat (Gap 0 days -> 1 day total)
+
+    service.create_exercise("Test Stats", ExerciseType::Resistance, None)?;
+
+    // Add workouts
+    service.add_workout("Test Stats", day1, Some(3), Some(10), Some(50.0), None, None, None, None, None, None)?; // PB: W=50, R=10
+    service.add_workout("Test Stats", day2, Some(3), Some(8), Some(55.0), Some(10), None, None, None, None, None)?; // PB: W=55, D=10
+    service.add_workout("Test Stats", day3, Some(4), Some(6), Some(50.0), Some(12), None, None, None, None, None)?; // PB: D=12
+    service.add_workout("Test Stats", day4, Some(2), Some(12), Some(45.0), None, Some(5.0), None, None, None, None)?; // PB: R=12, Dist=5.0
+    service.add_workout("Test Stats", day5, Some(3), Some(10), Some(55.0), Some(10), Some(5.5), None, None, None, None)?; // PB: Dist=5.5
+
+    // --- Test with daily streak interval (default) ---
+    let stats_daily = service.get_exercise_stats("Test Stats")?;
+
+    assert_eq!(stats_daily.canonical_name, "Test Stats");
+    assert_eq!(stats_daily.total_workouts, 5);
+    assert_eq!(stats_daily.first_workout_date, Some(day1));
+    assert_eq!(stats_daily.last_workout_date, Some(day5));
+
+    // Avg/week: 5 workouts / (8 days / 7 days/week) = 5 / (8/7) = 35/8 = 4.375
+    assert!((stats_daily.avg_workouts_per_week.unwrap() - 4.375).abs() < 0.01);
+
+    // Gaps: day2-day1=2 days, day3-day2=1 day, day4-day3=4 days, day5-day4=1 day. Max gap = 4 days. DB stores diff, we want gap between.
+    // Longest gap days: (day2-day1)-1 = 1, (day3-day2)-1 = 0, (day4-day3)-1 = 3, (day5-day4)-1 = 0 -> Max = 3
+    assert_eq!(stats_daily.longest_gap_days, Some(3));
+
+    // Streaks (daily interval = 1 day):
+    // day1 -> day2 (gap 1) NO
+    // day2 -> day3 (gap 0) YES (Streak: day2, day3 = 2)
+    // day3 -> day4 (gap 3) NO
+    // day4 -> day5 (gap 0) YES (Streak: day4, day5 = 2)
+    // Longest = 2. Current = 2 (ends on day5, today is > day5) -> Should current be 0? Yes.
+    assert_eq!(stats_daily.current_streak, 0); // Assuming test runs after day5
+    assert_eq!(stats_daily.longest_streak, 2);
+    assert_eq!(stats_daily.streak_interval_days, 1);
+
+    // PBs
+    assert_eq!(stats_daily.personal_bests.max_weight, Some(55.0));
+    assert_eq!(stats_daily.personal_bests.max_reps, Some(12));
+    assert_eq!(stats_daily.personal_bests.max_duration_minutes, Some(12));
+    assert_eq!(stats_daily.personal_bests.max_distance_km, Some(5.5));
+
+
+     // --- Test with 2-day streak interval ---
+     service.set_streak_interval(2)?;
+     let stats_2day = service.get_exercise_stats("Test Stats")?;
+
+     assert_eq!(stats_2day.streak_interval_days, 2);
+     // Streaks (2-day interval):
+     // day1 -> day2 (gap 1 <= 2) YES (Streak: day1, day2 = 2)
+     // day2 -> day3 (gap 0 <= 2) YES (Streak: day1, day2, day3 = 3)
+     // day3 -> day4 (gap 3 > 2) NO
+     // day4 -> day5 (gap 0 <= 2) YES (Streak: day4, day5 = 2)
+     // Longest = 3. Current = 0 (ends on day5, today > day5+2)
+     assert_eq!(stats_2day.current_streak, 0);
+     assert_eq!(stats_2day.longest_streak, 3);
+
+
+      // --- Test Edge Cases ---
+      // Test stats for exercise with no workouts
+      service.create_exercise("No Workouts", ExerciseType::Cardio, None)?;
+      let no_workout_result = service.get_exercise_stats("No Workouts");
+      assert!(no_workout_result.is_err());
+      match no_workout_result.unwrap_err().downcast_ref::<DbError>() {
+         Some(DbError::NoWorkoutDataFound(_)) => (),
+         _ => panic!("Expected NoWorkoutDataFound error"),
+      }
+
+      // Test stats for exercise with one workout
+      service.create_exercise("One Workout", ExerciseType::Resistance, None)?;
+      let day_single = NaiveDate::from_ymd_opt(2023, 11, 1).unwrap();
+      service.add_workout("One Workout", day_single, Some(1), Some(5), Some(10.0), None, None, None, None, None, None)?;
+      let one_workout_stats = service.get_exercise_stats("One Workout")?;
+
+      assert_eq!(one_workout_stats.total_workouts, 1);
+      assert_eq!(one_workout_stats.first_workout_date, Some(day_single));
+      assert_eq!(one_workout_stats.last_workout_date, Some(day_single));
+      assert!(one_workout_stats.avg_workouts_per_week.is_none());
+      assert!(one_workout_stats.longest_gap_days.is_none());
+      assert_eq!(one_workout_stats.current_streak, 0); // Needs >= 1 day gap from today
+      assert_eq!(one_workout_stats.longest_streak, 1);
+      assert_eq!(one_workout_stats.personal_bests.max_weight, Some(10.0));
+      assert_eq!(one_workout_stats.personal_bests.max_reps, Some(5));
+      assert!(one_workout_stats.personal_bests.max_duration_minutes.is_none());
+      assert!(one_workout_stats.personal_bests.max_distance_km.is_none());
+
 
     Ok(())
 }

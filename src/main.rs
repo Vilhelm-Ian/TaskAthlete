@@ -1,15 +1,19 @@
+//src/main.rs
 mod cli; // Keep cli module for parsing args
 
 use anyhow::{bail, Context, Result};
 use chrono::{Utc, Duration, NaiveDate}; // Keep Duration if needed, remove if not
-use comfy_table::{presets::UTF8_FULL, Cell, Color, ContentArrangement, Table};
+use comfy_table::{presets::UTF8_FULL, Cell, Color, ContentArrangement, Table, Attribute, CellAlignment};
 use std::io::{stdin, Write, stdout}; // For prompts
 use std::collections::HashMap;
 
 use workout_tracker_lib::{
     AppService, ConfigError, ExerciseDefinition, ExerciseType, Units, Workout, WorkoutFilters,
-    PBInfo, PBType, VolumeFilters, PbMetricScope // Import PB types
+    PBInfo, VolumeFilters, DbError, ExerciseStats, PersonalBests // Import PB types, DbError, Stats types
 };
+
+// Constants for display units
+const KM_TO_MILES: f64 = 0.621371;
 
 fn main() -> Result<()> {
     // --- Check for completion generation request FIRST ---
@@ -57,19 +61,19 @@ fn main() -> Result<()> {
             };
 
             match service.edit_exercise(&identifier, name.as_deref(), db_type, muscles_update) {
-                 Ok(0) => println!("Exercise '{}' not found or no changes specified.", identifier),
+                 // Ok(0) case is now handled by Err(DbError::ExerciseNotFound) from the service layer
                  Ok(rows) => {
                      println!("Successfully updated exercise definition '{}' ({} row(s) affected).", identifier, rows);
                     if name.is_some() {
                         println!("Note: If the name was changed, corresponding workout entries and aliases were also updated.");
                     }
                  }
-                 Err(e) => bail!("Error editing exercise '{}': {}", identifier, e), // Handles unique name error from service
+                 Err(e) => bail!("Error editing exercise '{}': {}", identifier, e), // Handles unique name & not found errors from service
             }
         }
         cli::Commands::DeleteExercise { identifier } => {
              match service.delete_exercise(&identifier) {
-                Ok(0) => println!("Exercise definition '{}' not found.", identifier), // Should ideally be Err(DbError::NotFound) from service
+                // Ok(0) case handled by Err(DbError::NotFound) from service
                 Ok(rows) => println!("Successfully deleted exercise definition '{}' ({} row(s) affected). Associated aliases were also deleted.", identifier, rows),
                 Err(e) => bail!("Error deleting exercise '{}': {}", identifier, e),
             }
@@ -78,7 +82,8 @@ fn main() -> Result<()> {
         // --- Workout Entry Commands ---
         cli::Commands::Add {
             exercise, date, // Feature 3: Get date from args
-            sets, reps, weight, duration, notes,
+            sets, reps, weight, duration, distance, // Add distance arg
+            notes,
             implicit_type, implicit_muscles,
         } => {
             let identifier_trimmed = exercise.trim();
@@ -134,7 +139,8 @@ fn main() -> Result<()> {
             let units = service.config.units;
             match service.add_workout(
                 identifier_trimmed, date, // Pass date
-                sets, reps, weight, duration, notes,
+                sets, reps, weight, duration, distance, // Pass distance
+                notes,
                 db_implicit_type, implicit_muscles, // Pass implicit creation details
                 bodyweight_to_use, // Pass the resolved bodyweight (if applicable)
             ) {
@@ -150,6 +156,7 @@ fn main() -> Result<()> {
 
                      // Handle PB notification (Feature 4)
                      if let Some(pb_info) = pb_info_opt {
+                         // Pass service by reference to allow prompting/config updates
                          handle_pb_notification(&mut service, &pb_info, units)?;
                      }
                  }
@@ -157,16 +164,16 @@ fn main() -> Result<()> {
              }
         }
 
-        cli::Commands::EditWorkout { id, exercise, sets, reps, weight, duration, notes, date } => { // Feature 3: Handle date edit
-            match service.edit_workout(id, exercise, sets, reps, weight, duration, notes, date) { // Pass date to service
-                Ok(0) => println!("Workout ID {} not found or no changes specified.", id),
+        cli::Commands::EditWorkout { id, exercise, sets, reps, weight, duration, distance, notes, date } => { // Add distance, handle date edit
+            match service.edit_workout(id, exercise, sets, reps, weight, duration, distance, notes, date) { // Pass distance and date to service
+                // Ok(0) case handled by Err(DbError::NotFound) from service
                 Ok(rows) => println!("Successfully updated workout ID {} ({} row(s) affected).", id, rows),
                 Err(e) => bail!("Error editing workout ID {}: {}", id, e),
             }
         }
         cli::Commands::DeleteWorkout { id } => {
             match service.delete_workout(id) {
-                Ok(0) => println!("Workout ID {} not found.", id),
+                // Ok(0) case handled by Err(DbError::NotFound) from service
                 Ok(rows) => println!("Successfully deleted workout ID {} ({} row(s) affected).", id, rows),
                 Err(e) => bail!("Error deleting workout ID {}: {}", id, e),
             }
@@ -211,8 +218,41 @@ fn main() -> Result<()> {
                         .unwrap_or(Color::Green); // Fallback
                     print_workout_table(workouts, header_color, service.config.units);
                 }
-                Err(e) => bail!("Error listing workouts: {}", e),
+                 Err(e) => {
+                     // Handle specific case where exercise filter didn't find the exercise
+                    if let Some(db_err) = e.downcast_ref::<DbError>() {
+                        if let DbError::ExerciseNotFound(ident) = db_err {
+                            println!("Exercise identifier '{}' not found. No workouts listed.", ident);
+                            return Ok(()) // Exit gracefully
+                        }
+                    }
+                    // Otherwise, bail with the original error
+                    bail!("Error listing workouts: {}", e);
+                 }
              }
+        }
+         cli::Commands::Stats { exercise } => {
+            match service.get_exercise_stats(&exercise) {
+                Ok(stats) => print_exercise_stats(&stats, service.config.units),
+                Err(e) => {
+                    // Handle specific "not found" errors gracefully
+                    if let Some(db_err) = e.downcast_ref::<DbError>() {
+                         match db_err {
+                             DbError::ExerciseNotFound(ident) => {
+                                 println!("Error: Exercise '{}' not found.", ident);
+                                 return Ok(());
+                             }
+                             DbError::NoWorkoutDataFound(name) => {
+                                println!("No workout data found for exercise '{}'. Cannot calculate stats.", name);
+                                return Ok(());
+                             }
+                             _ => {} // Fall through for other DbErrors
+                         }
+                    }
+                    // Bail for other errors
+                    bail!("Error getting exercise stats for '{}': {}", exercise, e);
+                }
+            }
         }
         cli::Commands::Volume {
             exercise, date, type_, muscle, limit_days, start_date, end_date,
@@ -270,7 +310,7 @@ fn main() -> Result<()> {
         }
         cli::Commands::Unalias { alias_name } => {
             match service.delete_alias(&alias_name) {
-                Ok(0) => println!("Alias '{}' not found.", alias_name), // Should be Err from service
+                // Ok(0) handled by Err(DbError::NotFound) from service
                 Ok(rows) => println!("Successfully deleted alias '{}' ({} row(s) affected).", alias_name, rows),
                 Err(e) => bail!("Error deleting alias '{}': {}", alias_name, e),
             }
@@ -311,16 +351,46 @@ fn main() -> Result<()> {
                  Err(e) => bail!("Error setting bodyweight: {}", e),
             }
         }
-         cli::Commands::SetPbNotification { enabled } => { // Feature 4
-            match service.set_pb_notification(enabled) {
+         cli::Commands::SetPbNotification { enabled } => { // Global enable/disable
+            match service.set_pb_notification_enabled(enabled) {
                 Ok(()) => {
                     println!(
-                        "Successfully {} Personal Best notifications.",
+                        "Successfully {} Personal Best notifications globally.",
                         if enabled { "enabled" } else { "disabled" }
                     );
                     println!("Config file updated: {:?}", service.get_config_path());
                 }
-                Err(e) => bail!("Error updating PB notification setting: {}", e),
+                Err(e) => bail!("Error updating global PB notification setting: {}", e),
+            }
+        }
+        cli::Commands::SetPbNotifyWeight { enabled } => {
+            match service.set_pb_notify_weight(enabled) {
+                Ok(()) => println!("Set Weight PB notification to: {}. Config updated.", enabled),
+                Err(e) => bail!("Error setting weight PB notification: {}", e),
+            }
+        }
+        cli::Commands::SetPbNotifyReps { enabled } => {
+            match service.set_pb_notify_reps(enabled) {
+                Ok(()) => println!("Set Reps PB notification to: {}. Config updated.", enabled),
+                Err(e) => bail!("Error setting reps PB notification: {}", e),
+            }
+        }
+        cli::Commands::SetPbNotifyDuration { enabled } => {
+             match service.set_pb_notify_duration(enabled) {
+                 Ok(()) => println!("Set Duration PB notification to: {}. Config updated.", enabled),
+                 Err(e) => bail!("Error setting duration PB notification: {}", e),
+             }
+        }
+        cli::Commands::SetPbNotifyDistance { enabled } => {
+             match service.set_pb_notify_distance(enabled) {
+                 Ok(()) => println!("Set Distance PB notification to: {}. Config updated.", enabled),
+                 Err(e) => bail!("Error setting distance PB notification: {}", e),
+             }
+        }
+        cli::Commands::SetStreakInterval { days } => {
+            match service.set_streak_interval(days) {
+                Ok(()) => println!("Set streak interval to {} day(s). Config updated.", days),
+                Err(e) => bail!("Error setting streak interval: {}", e),
             }
         }
     }
@@ -374,8 +444,21 @@ fn prompt_and_set_bodyweight_cli(service: &mut AppService) -> Result<f64, Config
 
 
 /// Handles PB notification logic, including prompting if config not set (Feature 4)
+/// Needs mutable service to potentially update config via prompt.
 fn handle_pb_notification(service: &mut AppService, pb_info: &PBInfo, units: Units) -> Result<()> {
-    let print_notification = match service.check_pb_notification_config() {
+    // Check if *any* relevant PB was achieved before checking global enabled status
+    let relevant_pb_achieved =
+        (pb_info.achieved_weight_pb && service.config.notify_pb_weight) ||
+        (pb_info.achieved_reps_pb && service.config.notify_pb_reps) ||
+        (pb_info.achieved_duration_pb && service.config.notify_pb_duration) ||
+        (pb_info.achieved_distance_pb && service.config.notify_pb_distance);
+
+    if !relevant_pb_achieved {
+        return Ok(()); // No relevant PB achieved, nothing to notify
+    }
+
+    // Check if global notifications are enabled (prompt if not set)
+    let global_notifications_enabled = match service.check_pb_notification_config() {
         Ok(enabled) => enabled, // Config is set, use the value
         Err(ConfigError::PbNotificationNotSet) => {
              // Config not set, prompt the user
@@ -384,48 +467,74 @@ fn handle_pb_notification(service: &mut AppService, pb_info: &PBInfo, units: Uni
         Err(e) => return Err(e.into()), // Other config error
     };
 
-    if print_notification {
-        print_pb_message(pb_info, units);
+    if global_notifications_enabled {
+        // Print only the PBs that were actually achieved *and* have notifications enabled in config
+        print_pb_message(pb_info, units, &service.config);
     }
     Ok(())
 }
 
-/// Prints the formatted PB message.
-fn print_pb_message(pb_info: &PBInfo, units: Units) {
-    let weight_unit_str = match units { Units::Metric => "kg", Units::Imperial => "lbs", };
-    println!("*********************************");
-    println!("*     🎉 Personal Best! 🎉     *");
-    match pb_info.pb_type {
-        PBType::Weight => {
-             println!("* New Max Weight: {:.2} {} {}",
-                pb_info.new_weight.unwrap_or(0.0),
-                weight_unit_str,
-                pb_info.previous_weight.map_or("".to_string(), |p| format!("(Previous: {:.2})", p))
-            );
-        },
-        PBType::Reps => {
-            println!("* New Max Reps: {} {}",
-                pb_info.new_reps.unwrap_or(0),
-                pb_info.previous_reps.map_or("".to_string(), |p| format!("(Previous: {})", p))
-            );
-        },
-        PBType::Both => {
-            println!("* New Max Weight: {:.2} {} {}",
-                pb_info.new_weight.unwrap_or(0.0),
-                weight_unit_str,
-                pb_info.previous_weight.map_or("".to_string(), |p| format!("(Previous: {:.2})", p))
-            );
-            println!("* New Max Reps: {} {}",
-                pb_info.new_reps.unwrap_or(0),
-                pb_info.previous_reps.map_or("".to_string(), |p| format!("(Previous: {})", p))
-            );
-        },
+/// Prints the formatted PB message based on achieved PBs and config settings.
+fn print_pb_message(pb_info: &PBInfo, units: Units, config: &workout_tracker_lib::Config) {
+    let mut messages = Vec::new();
+
+    if pb_info.achieved_weight_pb && config.notify_pb_weight {
+        let weight_unit_str = match units { Units::Metric => "kg", Units::Imperial => "lbs", };
+        messages.push(format!(
+            "New Max Weight: {:.2} {} {}",
+            pb_info.new_weight.unwrap_or(0.0),
+            weight_unit_str,
+            pb_info.previous_weight.map_or("".to_string(), |p| format!("(Previous: {:.2})", p))
+        ));
     }
-     println!("*********************************");
+    if pb_info.achieved_reps_pb && config.notify_pb_reps {
+         messages.push(format!(
+            "New Max Reps: {} {}",
+            pb_info.new_reps.unwrap_or(0),
+            pb_info.previous_reps.map_or("".to_string(), |p| format!("(Previous: {})", p))
+        ));
+    }
+    if pb_info.achieved_duration_pb && config.notify_pb_duration {
+        messages.push(format!(
+            "New Max Duration: {} min {}",
+            pb_info.new_duration.unwrap_or(0),
+            pb_info.previous_duration.map_or("".to_string(), |p| format!("(Previous: {} min)", p))
+        ));
+    }
+    if pb_info.achieved_distance_pb && config.notify_pb_distance {
+        let (dist_val, dist_unit) = match units {
+            Units::Metric => (pb_info.new_distance.unwrap_or(0.0), "km"),
+            Units::Imperial => (pb_info.new_distance.unwrap_or(0.0) * KM_TO_MILES, "miles"),
+        };
+        let prev_dist_str = match pb_info.previous_distance {
+            Some(prev_km) => {
+                let (prev_val, prev_unit) = match units {
+                     Units::Metric => (prev_km, "km"),
+                     Units::Imperial => (prev_km * KM_TO_MILES, "miles"),
+                };
+                format!("(Previous: {:.2} {})", prev_val, prev_unit)
+            },
+            None => "".to_string(),
+        };
+        messages.push(format!(
+            "New Max Distance: {:.2} {} {}",
+            dist_val, dist_unit, prev_dist_str
+        ));
+    }
+
+    if !messages.is_empty() {
+        println!("*********************************");
+        println!("*     🎉 Personal Best! 🎉     *");
+        for msg in messages {
+            println!("* {}", msg);
+        }
+        println!("*********************************");
+    }
 }
 
 /// Interactive prompt for PB notification setting, specific to the CLI (Feature 4)
 /// Updates the service's config and saves it. Returns the chosen setting (true/false).
+/// Needs mutable service reference.
 fn prompt_and_set_pb_notification_cli(service: &mut AppService) -> Result<bool, ConfigError> {
     println!("You achieved a Personal Best!");
     print!("Do you want to be notified about PBs in the future? (Y/N): ");
@@ -437,11 +546,11 @@ fn prompt_and_set_pb_notification_cli(service: &mut AppService) -> Result<bool, 
 
     if trimmed_input.eq_ignore_ascii_case("y") {
         println!("Okay, enabling future PB notifications.");
-        service.set_pb_notification(true)?;
+        service.set_pb_notification_enabled(true)?; // Use specific service method
         Ok(true)
     } else if trimmed_input.eq_ignore_ascii_case("n") {
         println!("Okay, disabling future PB notifications.");
-        service.set_pb_notification(false)?;
+        service.set_pb_notification_enabled(false)?; // Use specific service method
         Ok(false)
     } else {
          // Invalid input, treat as cancellation for this time, don't update config
@@ -456,10 +565,8 @@ fn prompt_and_set_pb_notification_cli(service: &mut AppService) -> Result<bool, 
 /// Prints workout entries in a formatted table.
 fn print_workout_table(workouts: Vec<Workout>, header_color: Color, units: Units) {
     let mut table = Table::new();
-    let weight_unit_str = match units {
-        Units::Metric => "(kg)",
-        Units::Imperial => "(lbs)",
-    };
+    let weight_unit_str = match units { Units::Metric => "(kg)", Units::Imperial => "(lbs)", };
+    let distance_unit_str = match units { Units::Metric => "(km)", Units::Imperial => "(miles)", };
 
     table
         .load_preset(UTF8_FULL)
@@ -473,10 +580,17 @@ fn print_workout_table(workouts: Vec<Workout>, header_color: Color, units: Units
             Cell::new("Reps").fg(header_color),
             Cell::new(format!("Weight {}", weight_unit_str)).fg(header_color),
             Cell::new("Duration (min)").fg(header_color),
+            Cell::new(format!("Distance {}", distance_unit_str)).fg(header_color), // Added distance header
             Cell::new("Notes").fg(header_color),
         ]);
 
     for workout in workouts {
+        // Convert distance for display if necessary
+        let display_distance = workout.distance.map(|km| match units {
+            Units::Metric => km,
+            Units::Imperial => km * KM_TO_MILES,
+        });
+
         table.add_row(vec![
             Cell::new(workout.id.to_string()),
             Cell::new(workout.timestamp.format("%Y-%m-%d %H:%M").to_string()), // Format for display
@@ -486,6 +600,7 @@ fn print_workout_table(workouts: Vec<Workout>, header_color: Color, units: Units
             Cell::new(workout.reps.map_or("-".to_string(), |v| v.to_string())),
             Cell::new(workout.weight.map_or("-".to_string(), |v| format!("{:.2}", v))),
             Cell::new(workout.duration_minutes.map_or("-".to_string(), |v| v.to_string())),
+            Cell::new(display_distance.map_or("-".to_string(), |v| format!("{:.2}", v))), // Display formatted distance
             Cell::new(workout.notes.as_deref().unwrap_or("-")),
         ]);
     }
@@ -541,6 +656,7 @@ fn print_alias_table(aliases: std::collections::HashMap<String, String>) {
     println!("{table}");
 }
 
+/// Prints workout volume in a table
 fn print_volume_table(volume_data: Vec<(NaiveDate, String, f64)>, units: Units) {
     let mut table = Table::new();
     let header_color = workout_tracker_lib::parse_color("Yellow") // Use a different color for volume
@@ -557,10 +673,11 @@ fn print_volume_table(volume_data: Vec<(NaiveDate, String, f64)>, units: Units) 
         .set_content_arrangement(ContentArrangement::Dynamic)
         .set_header(vec![
             Cell::new("Date").fg(header_color),
-            Cell::new("Exercises").fg(header_color),
+            Cell::new("Exercise").fg(header_color), // Changed header
             Cell::new(format!("Volume (Sets*Reps*Weight {})", weight_unit_str)).fg(header_color),
         ]);
 
+    // Aggregate volume per day/exercise before printing (data from DB is already aggregated)
     for (date, exercise_name, volume) in volume_data { // Destructure tuple
         table.add_row(vec![
             Cell::new(date.format("%Y-%m-%d")),
@@ -569,4 +686,84 @@ fn print_volume_table(volume_data: Vec<(NaiveDate, String, f64)>, units: Units) 
         ]);
     }
     println!("{table}");
+}
+
+/// Prints exercise statistics.
+fn print_exercise_stats(stats: &ExerciseStats, units: Units) {
+    println!("\n--- Statistics for '{}' ---", stats.canonical_name);
+
+    let mut table = Table::new();
+    table.load_preset(UTF8_FULL)
+         .set_content_arrangement(ContentArrangement::Dynamic); // No headers needed for key-value
+
+    table.add_row(vec![Cell::new("Total Workouts").add_attribute(Attribute::Bold), Cell::new(stats.total_workouts)]);
+    table.add_row(vec![
+        Cell::new("First Workout").add_attribute(Attribute::Bold),
+        Cell::new(stats.first_workout_date.map_or("N/A".to_string(), |d| d.format("%Y-%m-%d").to_string()))
+    ]);
+    table.add_row(vec![
+        Cell::new("Last Workout").add_attribute(Attribute::Bold),
+        Cell::new(stats.last_workout_date.map_or("N/A".to_string(), |d| d.format("%Y-%m-%d").to_string()))
+    ]);
+    table.add_row(vec![
+        Cell::new("Avg Workouts / Week").add_attribute(Attribute::Bold),
+        Cell::new(stats.avg_workouts_per_week.map_or("N/A".to_string(), |avg| format!("{:.2}", avg)))
+    ]);
+     table.add_row(vec![
+        Cell::new("Longest Gap").add_attribute(Attribute::Bold),
+        Cell::new(stats.longest_gap_days.map_or("N/A".to_string(), |gap| format!("{} days", gap)))
+    ]);
+
+    let streak_interval_str = match stats.streak_interval_days {
+        1 => "(Daily)".to_string(),
+        n => format!("({}-day Interval)", n)
+    };
+    table.add_row(vec![
+        Cell::new(format!("Current Streak {}", streak_interval_str)).add_attribute(Attribute::Bold),
+        Cell::new(if stats.current_streak > 0 { stats.current_streak.to_string() } else { "0".to_string() })
+    ]);
+    table.add_row(vec![
+        Cell::new(format!("Longest Streak {}", streak_interval_str)).add_attribute(Attribute::Bold),
+        Cell::new(if stats.longest_streak > 0 { stats.longest_streak.to_string() } else { "0".to_string() })
+    ]);
+
+    println!("{}", table);
+
+    // Personal Bests Section
+    println!("\n--- Personal Bests ---");
+    let mut pb_table = Table::new();
+    pb_table.load_preset(UTF8_FULL)
+            .set_content_arrangement(ContentArrangement::Dynamic);
+
+    let weight_unit_str = match units { Units::Metric => "kg", Units::Imperial => "lbs", };
+    let distance_unit_str = match units { Units::Metric => "km", Units::Imperial => "miles", };
+
+    let mut has_pbs = false;
+    if let Some(pb_weight) = stats.personal_bests.max_weight {
+        pb_table.add_row(vec![Cell::new("Max Weight").add_attribute(Attribute::Bold), Cell::new(format!("{:.2} {}", pb_weight, weight_unit_str))]);
+        has_pbs = true;
+    }
+    if let Some(pb_reps) = stats.personal_bests.max_reps {
+        pb_table.add_row(vec![Cell::new("Max Reps").add_attribute(Attribute::Bold), Cell::new(pb_reps)]);
+         has_pbs = true;
+    }
+    if let Some(pb_duration) = stats.personal_bests.max_duration_minutes {
+        pb_table.add_row(vec![Cell::new("Max Duration").add_attribute(Attribute::Bold), Cell::new(format!("{} min", pb_duration))]);
+        has_pbs = true;
+    }
+    if let Some(pb_distance_km) = stats.personal_bests.max_distance_km {
+        let (dist_val, dist_unit) = match units {
+            Units::Metric => (pb_distance_km, distance_unit_str),
+            Units::Imperial => (pb_distance_km * KM_TO_MILES, distance_unit_str),
+        };
+        pb_table.add_row(vec![Cell::new("Max Distance").add_attribute(Attribute::Bold), Cell::new(format!("{:.2} {}", dist_val, dist_unit))]);
+         has_pbs = true;
+    }
+
+    if has_pbs {
+        println!("{}", pb_table);
+    } else {
+        println!("No personal bests recorded for this exercise yet.");
+    }
+    println!(); // Add a blank line at the end
 }

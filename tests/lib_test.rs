@@ -196,7 +196,7 @@ fn test_delete_exercise_with_alias() -> Result<()> {
     service.create_alias("td", "To Delete")?;
 
     // Delete exercise using alias
-    let result = service.delete_exercise("td")?;
+    let result = service.delete_exercise(&vec!["td".to_string()])?;
     assert_eq!(result, 1);
 
     // Verify exercise is gone
@@ -646,7 +646,7 @@ fn test_delete_exercise() -> Result<()> {
     service.create_exercise("Bench Press", ExerciseType::Resistance, Some("chest"))?;
 
     // Delete it
-    let result = service.delete_exercise("Bench Press")?;
+    let result = service.delete_exercise(&vec!["Bench Press".to_string()])?;
     assert_eq!(result, 1);
 
     // Verify it's gone
@@ -654,7 +654,7 @@ fn test_delete_exercise() -> Result<()> {
     assert!(exercise.is_none());
 
      // Try deleting non-existent exercise
-    let delete_result = service.delete_exercise("NonExistent");
+    let delete_result = service.delete_exercise(&vec!["NonExistent".to_string()]);
     assert!(delete_result.is_err());
     assert!(delete_result.unwrap_err().downcast_ref::<DbError>().map_or(false, |e| matches!(e, DbError::ExerciseNotFound(_))));
 
@@ -799,7 +799,7 @@ fn test_exercise_not_found() -> Result<()> {
     }
 
     // Try to delete non-existent exercise
-    let result = service.delete_exercise("Non-existent");
+    let result = service.delete_exercise(&vec!["Non-existent".to_string()]);
     assert!(result.is_err());
      match result.unwrap_err().downcast_ref::<DbError>() {
         Some(DbError::ExerciseNotFound(_)) => (),

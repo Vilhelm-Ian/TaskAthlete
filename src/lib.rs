@@ -1,4 +1,5 @@
 use anyhow::{bail, Context, Result};
+use chrono::format::Numeric;
 use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc, Duration}; // Add Duration, TimeZone
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
@@ -287,7 +288,9 @@ impl AppService {
 
     /// Deletes an exercise definition (identified by ID, Alias, or Name). Returns number of definitions deleted (0 or 1).
     /// Includes warnings about associated workouts and deletes associated aliases.
-    pub fn delete_exercise(&mut self, identifier: &str) -> Result<u64> {
+    pub fn delete_exercise(&mut self, identifiers: &Vec<String>) -> Result<u64> {
+        let mut num_deleted = 0;
+        for identifier in identifiers {
         // 1. Resolve identifier to get canonical name and check existence
         let exercise_def = self.resolve_exercise_identifier(identifier)?
             .ok_or_else(|| DbError::ExerciseNotFound(identifier.to_string()))?;
@@ -315,7 +318,10 @@ impl AppService {
             .map_err(|e| match e {
                 DbError::ExerciseNotFound(_) => anyhow::anyhow!("Exercise '{}' not found to delete.", identifier), // Should not happen if resolve worked, but handle anyway
                 _ => anyhow::Error::new(e).context(format!("Failed to delete exercise '{}' from database", canonical_name)),
-            })
+            })?;
+        num_deleted += 1;
+        }
+        Ok(num_deleted)
     }
 
 

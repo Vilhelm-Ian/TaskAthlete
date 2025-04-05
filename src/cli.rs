@@ -65,7 +65,7 @@ pub enum Commands {
     /// Delete an exercise definition
     DeleteExercise {
         /// ID, Name, or Alias of the exercise to delete
-        identifier: String,
+        identifiers: Vec<String>,
     },
     /// Edit an exercise definition
     EditExercise {

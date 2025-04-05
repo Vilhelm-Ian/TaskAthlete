@@ -73,11 +73,11 @@ fn main() -> Result<()> {
                  Err(e) => bail!("Error editing exercise '{}': {}", identifier, e), // Handles unique name & not found errors from service
             }
         }
-        cli::Commands::DeleteExercise { identifier } => {
-             match service.delete_exercise(&identifier) {
+        cli::Commands::DeleteExercise { identifiers } => {
+             match service.delete_exercise(&identifiers) {
                 // Ok(0) case handled by Err(DbError::NotFound) from service
-                Ok(rows) => println!("Successfully deleted exercise definition '{}' ({} row(s) affected). Associated aliases were also deleted.", identifier, rows),
-                Err(e) => bail!("Error deleting exercise '{}': {}", identifier, e),
+                Ok(rows) => println!("Successfully deleted exercise definition '{:?}' ({} row(s) affected). Associated aliases were also deleted.", identifiers, rows),
+                Err(e) => bail!("Error deleting exercise: {}", e),
             }
         }
 

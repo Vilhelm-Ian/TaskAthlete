@@ -3,7 +3,7 @@ mod cli; // Keep cli module for parsing args
 use anyhow::{bail, Context, Result};
 use chrono::{Utc, Duration, NaiveDate}; // Keep Duration if needed, remove if not
 use comfy_table::{presets::UTF8_FULL, Cell, Color, ContentArrangement, Table};
-use std::io::{stdin, Write}; // For prompts
+use std::io::{stdin, Write, stdout}; // For prompts
 use std::collections::HashMap;
 
 use workout_tracker_lib::{
@@ -12,14 +12,28 @@ use workout_tracker_lib::{
 };
 
 fn main() -> Result<()> {
+    // --- Check for completion generation request FIRST ---
+    let cli_args = cli::parse_args(); // Parse arguments once
+
+    if let cli::Commands::GenerateCompletion { shell } = cli_args.command {
+        let mut cmd = cli::build_cli_command(); // Get the command structure
+        let bin_name = cmd.get_name().to_string(); // Get the binary name
+
+        eprintln!("Generating completion script for {}...", shell); // Print to stderr
+        clap_complete::generate(shell, &mut cmd, bin_name, &mut stdout()); // Print script to stdout
+        return Ok(()); // Exit after generating script
+    }
+
     // Initialize the application service (loads config, connects to DB)
     let mut service = AppService::initialize().context("Failed to initialize application service")?;
 
-    // Parse command-line arguments using the cli module
-    let cli_args = cli::parse_args();
 
     // --- Execute Commands using AppService ---
     match cli_args.command {
+        cli::Commands::GenerateCompletion { .. } => {
+            // This case is handled above, but keep it exhaustive
+             unreachable!("Completion generation should have exited already");
+        }
         // --- Exercise Definition Commands ---
         cli::Commands::CreateExercise { name, type_, muscles } => {
             let db_type = cli_type_to_db_type(type_);

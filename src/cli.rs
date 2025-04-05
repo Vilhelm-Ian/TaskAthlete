@@ -1,6 +1,7 @@
 // src/cli.rs
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand, ValueEnum, CommandFactory};
 use chrono::{NaiveDate, Utc, Duration}; 
+use clap_complete::Shell;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "A CLI tool to track workouts", long_about = None)]
@@ -253,6 +254,11 @@ pub enum Commands {
         #[arg(value_enum)]
         units: UnitsCli,
      },
+    GenerateCompletion {
+        /// The shell to generate completions for
+        #[arg(value_enum)]
+        shell: Shell,
+    },
 }
 
 // Function to parse CLI arguments
@@ -260,8 +266,14 @@ pub fn parse_args() -> Cli {
     Cli::parse()
 }
 
+pub fn build_cli_command() -> clap::Command {
+    Cli::command()
+}
+
 #[derive(ValueEnum, Clone, Debug, PartialEq, Eq)]
 pub enum UnitsCli {
     Metric,
     Imperial,
 }
+
+

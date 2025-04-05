@@ -1,11 +1,11 @@
+//src/config.rs
 use anyhow::{Context, Result};
 use comfy_table::Color;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::{stdin, Write}; // Import Write for flush
+use std::io::{stdin, Write};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
-// Import strum for color parsing
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 
@@ -39,11 +39,25 @@ pub enum ConfigError {
     InvalidPbNotificationInput(String),
 }
 
+
+// Note: PbMetricScope removed as specific booleans are used now.
+//       Kept the enum definition commented out in case of future refactoring.
+// #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, EnumIter)]
+// #[serde(rename_all = "lowercase")]
+// pub enum PbMetricScope {
+//     All,     // Check weight and reps
+//     Weight,  // Only check weight PBs
+//     Reps,    // Only check reps PBs
+//     // Note: Disabling notifications entirely is handled by notify_on_pb = false
+// }
+// impl Default for PbMetricScope { fn default() -> Self { PbMetricScope::All } }
+
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Units {
-    Metric,   // e.g., kg
-    Imperial, // e.g., lbs
+    Metric,   // e.g., kg, km
+    Imperial, // e.g., lbs, miles
 }
 
 // Implement Default for Units
@@ -98,26 +112,47 @@ impl Default for ThemeConfig {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)] // Removed Default derive
 #[serde(default)] // Ensure defaults are used if fields are missing
 pub struct Config {
     pub bodyweight: Option<f64>,
     pub units: Units,
     pub prompt_for_bodyweight: bool, // Default is true
-    pub notify_on_pb: Option<bool>, // Feature 4: None = ask, Some(true/false) = configured
+    pub streak_interval_days: u32, // Default 1
+
+    // PB Notification Settings
+    pub notify_pb_enabled: Option<bool>, // None = prompt first time, Some(true/false) = user setting
+    pub notify_pb_weight: bool,
+    pub notify_pb_reps: bool,
+    pub notify_pb_duration: bool,
+    pub notify_pb_distance: bool,
+
+    // Theming
     pub theme: ThemeConfig,
 }
 
-// Implement Default for Config manually to set prompt_for_bodyweight correctly
-impl Config {
-    fn new_default() -> Self {
+// Implement Default for Config manually to set defaults correctly
+impl Default for Config {
+    fn default() -> Self {
         Config {
             bodyweight: None,
             units: Units::default(),
             prompt_for_bodyweight: true, // Explicitly true by default
-            notify_on_pb: None, // Default to None, so user is prompted first time
+            streak_interval_days: 1,     // Default to daily streaks
+            notify_pb_enabled: None,     // Default to None, so user is prompted first time
+            notify_pb_weight: true,      // Default to true
+            notify_pb_reps: true,        // Default to true
+            notify_pb_duration: true,    // Default to true
+            notify_pb_distance: true,    // Default to true
             theme: ThemeConfig::default(),
         }
+    }
+}
+
+impl Config {
+    // Helper to create a new instance with defaults
+    fn new_default() -> Self {
+        Self::default()
     }
 }
 
@@ -162,12 +197,9 @@ pub fn load_config(config_path: &Path) -> Result<Config, ConfigError> {
          Ok(default_config)
     } else {
          let config_content = fs::read_to_string(&config_path)?;
-         let mut config: Config = toml::from_str(&config_content)?;
-         // Ensure default for new fields if loading old config
-         if config.notify_on_pb.is_none() {
-             // If the field didn't exist in the file, keep it None (will prompt user)
-             // Don't need to save here, only on explicit change or prompt result.
-         }
+         // Use serde(default) to handle missing fields when parsing
+         let config: Config = toml::from_str(&config_content).map_err(ConfigError::TomlParse)?;
+         // No need to manually fill defaults here if using #[serde(default)] on struct and fields
          Ok(config)
     }
 }

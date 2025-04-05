@@ -10,6 +10,7 @@ about = "A CLI tool to track workouts"
 anyhow = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4.4", features = ["derive"] }
+clap_complete = "4.4"
 comfy-table = "7.0" # Or latest version
 dirs = "5.0"
 rusqlite = { version = "0.30", features = ["chrono", "bundled"] } # bundled is often easier

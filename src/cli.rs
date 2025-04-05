@@ -1,6 +1,8 @@
+//src/cli.rs
 // src/cli.rs
-use clap::{Parser, Subcommand, ValueEnum};
-use chrono::{NaiveDate, Utc, Duration, DateTime}; // Import DateTime
+use clap::{Parser, Subcommand, ValueEnum, CommandFactory};
+use chrono::{NaiveDate, Utc, Duration};
+use clap_complete::Shell;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "A CLI tool to track workouts", long_about = None)]
@@ -18,7 +20,7 @@ pub enum ExerciseTypeCli {
 }
 
 // Custom parser for date strings and shorthands
-fn parse_date_shorthand(s: &str) -> Result<NaiveDate, String> {
+pub fn parse_date_shorthand(s: &str) -> Result<NaiveDate, String> {
     match s.to_lowercase().as_str() {
         "today" => Ok(Utc::now().date_naive()),
         "yesterday" => Ok((Utc::now() - Duration::days(1)).date_naive()),
@@ -101,6 +103,10 @@ pub enum Commands {
         #[arg(short = 'd', long)] // Added short alias
         duration: Option<i64>,
 
+        /// Distance covered (e.g., km, miles)
+        #[arg(short = 'l', long)] // Use 'l' for distance (length)
+        distance: Option<f64>,
+
         /// Additional notes about the workout
         #[arg(short, long)]
         notes: Option<String>,
@@ -135,6 +141,9 @@ pub enum Commands {
         /// New duration in minutes
         #[arg(short = 'd', long)] // Added short alias
         duration: Option<i64>,
+        /// New distance covered (e.g., km, miles)
+        #[arg(short = 'l', long)] // Use 'l' for distance
+        distance: Option<f64>,
         /// New additional notes
         #[arg(short, long)]
         notes: Option<String>,
@@ -192,6 +201,12 @@ pub enum Commands {
         #[arg(short='m', long)] // short 'm'
         muscle: Option<String>,
     },
+     /// Show statistics for a specific exercise
+     Stats {
+        /// Name, ID, or Alias of the exercise to show stats for
+        #[arg(short = 'e', long)]
+        exercise: String,
+    },
     /// Create an alias for an existing exercise
     Alias { // Feature 1
         /// The alias name (e.g., "bp") - Must be unique
@@ -215,15 +230,171 @@ pub enum Commands {
         /// Your current bodyweight
         weight: f64
     },
-    /// Enable or disable Personal Best (PB) notifications
+    /// Enable or disable Personal Best (PB) notifications globally
     SetPbNotification { // Feature 4
         /// Enable PB notifications (`true` or `false`)
         enabled: bool,
     },
-    // Maybe add a command to set units later: SetUnits { units: UnitsCli }
+     /// Enable or disable Personal Best (PB) notifications for Weight
+     SetPbNotifyWeight {
+        /// Enable weight PB notifications (`true` or `false`)
+        enabled: bool,
+    },
+    /// Enable or disable Personal Best (PB) notifications for Reps
+    SetPbNotifyReps {
+        /// Enable reps PB notifications (`true` or `false`)
+        enabled: bool,
+    },
+    /// Enable or disable Personal Best (PB) notifications for Duration
+    SetPbNotifyDuration {
+        /// Enable duration PB notifications (`true` or `false`)
+        enabled: bool,
+    },
+    /// Enable or disable Personal Best (PB) notifications for Distance
+    SetPbNotifyDistance {
+        /// Enable distance PB notifications (`true` or `false`)
+        enabled: bool,
+    },
+    /// Set the interval in days for calculating streaks
+    SetStreakInterval {
+        /// Number of days allowed between workouts to maintain a streak (e.g., 1 for daily, 2 for every other day)
+        #[arg(value_parser = clap::value_parser!(u32).range(1..))] // Ensure at least 1 day
+        days: u32,
+    },
+    /// Show total workout volume (sets*reps*weight) per day
+    Volume { // Feature 1
+        /// Filter by exercise Name, ID or Alias
+        #[arg(short = 'e', long)]
+        exercise: Option<String>,
+
+        /// Filter by a specific date ('today', 'yesterday', YYYY-MM-DD, DD.MM.YYYY, Weekday Name)
+        #[arg(long, value_parser = parse_date_shorthand, conflicts_with_all = &["start_date", "end_date", "limit_days"])] // Corrected conflicts
+        date: Option<NaiveDate>,
+
+        /// Filter by exercise type
+        #[arg(short = 't', long, value_enum)]
+        type_: Option<ExerciseTypeCli>,
+
+        /// Filter by target muscle (matches if muscle is in the list)
+        #[arg(short, long)]
+        muscle: Option<String>,
+
+        /// Show only the last N days with workouts (when no date/range filters used)
+        #[arg(short = 'n', long, default_value_t = 7, conflicts_with_all = &["date", "start_date", "end_date"])] // Corrected conflicts
+        limit_days: u32,
+
+        // Optional date range
+        #[arg(long, value_parser = parse_date_shorthand, conflicts_with_all = &["date", "limit_days"])] // Corrected conflicts
+        start_date: Option<NaiveDate>,
+        #[arg(long, value_parser = parse_date_shorthand, conflicts_with_all = &["date", "limit_days"], requires="start_date")] // Corrected conflicts and added requires
+        end_date: Option<NaiveDate>,
+    },
+    /// Set default units (Metric/Imperial)
+    SetUnits { // Feature 3
+        #[arg(value_enum)]
+        units: UnitsCli,
+     },
+    GenerateCompletion {
+        /// The shell to generate completions for
+        #[arg(value_enum)]
+        shell: Shell,
+    },
 }
 
 // Function to parse CLI arguments
 pub fn parse_args() -> Cli {
     Cli::parse()
+}
+
+pub fn build_cli_command() -> clap::Command {
+    Cli::command()
+}
+
+#[derive(ValueEnum, Clone, Debug, PartialEq, Eq)]
+pub enum UnitsCli {
+    Metric,
+    Imperial,
+}
+
+
+
+#[cfg(test)]
+mod tests {
+    use super::*; // Import items from the parent module (cli)
+    use chrono::{NaiveDate, Utc, Duration};
+
+    #[test]
+    fn test_date_parsing_today() {
+        let result = parse_date_shorthand("today").unwrap();
+        let today = Utc::now().date_naive();
+        assert_eq!(result, today);
+    }
+
+    #[test]
+    fn test_date_parsing_yesterday() {
+        let result = parse_date_shorthand("yesterday").unwrap();
+        let yesterday = Utc::now().date_naive() - Duration::days(1);
+        assert_eq!(result, yesterday);
+    }
+
+    #[test]
+    fn test_date_parsing_yyyy_mm_dd() {
+        let result = parse_date_shorthand("2023-10-27").unwrap();
+        assert_eq!(result, NaiveDate::from_ymd_opt(2023, 10, 27).unwrap());
+    }
+
+    #[test]
+    fn test_date_parsing_dd_mm_yyyy() {
+        let result = parse_date_shorthand("27.10.2023").unwrap();
+        assert_eq!(result, NaiveDate::from_ymd_opt(2023, 10, 27).unwrap());
+    }
+
+    #[test]
+    fn test_date_parsing_yyyy_slash_mm_dd() {
+        let result = parse_date_shorthand("2023/10/27").unwrap();
+        assert_eq!(result, NaiveDate::from_ymd_opt(2023, 10, 27).unwrap());
+    }
+
+
+    #[test]
+    fn test_date_parsing_case_insensitive() {
+        let result_today = parse_date_shorthand("ToDaY").unwrap();
+        let today = Utc::now().date_naive();
+        assert_eq!(result_today, today);
+
+        let result_yesterday = parse_date_shorthand("yEsTeRdAy").unwrap();
+        let yesterday = Utc::now().date_naive() - Duration::days(1);
+        assert_eq!(result_yesterday, yesterday);
+    }
+
+    #[test]
+    fn test_date_parsing_invalid_format() {
+        let result = parse_date_shorthand("27-10-2023");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid date format"));
+
+        let result = parse_date_shorthand("October 27, 2023");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid date format"));
+
+        let result = parse_date_shorthand("invalid-date");
+         assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid date format"));
+    }
+
+    #[test]
+    fn test_date_parsing_invalid_date() {
+        // Valid format, invalid date
+        let result = parse_date_shorthand("2023-02-30"); // February 30th doesn't exist
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid date format")); // Our parser returns this generic message
+
+         let result = parse_date_shorthand("32.10.2023");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid date format"));
+
+         let result = parse_date_shorthand("2023/13/01");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid date format"));
+    }
 }

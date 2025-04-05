@@ -10,6 +10,8 @@ use clap_complete::Shell;
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
+    #[arg(long, global = true)]
+    pub export_csv: bool,
 }
 
 #[derive(ValueEnum, Clone, Debug, PartialEq, Eq)]

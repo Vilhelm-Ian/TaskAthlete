@@ -1,15 +1,16 @@
 //src/main.rs
 mod cli; // Keep cli module for parsing args
 
+use csv;
 use anyhow::{bail, Context, Result};
 use chrono::{Utc, Duration, NaiveDate}; // Keep Duration if needed, remove if not
-use comfy_table::{presets::UTF8_FULL, Cell, Color, ContentArrangement, Table, Attribute, CellAlignment};
+use comfy_table::{presets::UTF8_FULL, Cell, Color, ContentArrangement, Table, Attribute};
 use std::io::{stdin, Write, stdout}; // For prompts
-use std::collections::HashMap;
+use std::io;
 
-use workout_tracker_lib::{
+use task_athlete_lib::{
     AppService, ConfigError, ExerciseDefinition, ExerciseType, Units, Workout, WorkoutFilters,
-    PBInfo, VolumeFilters, DbError, ExerciseStats, PersonalBests // Import PB types, DbError, Stats types
+    PBInfo, VolumeFilters, DbError, ExerciseStats // Import PB types, DbError, Stats types
 };
 
 // Constants for display units
@@ -18,6 +19,7 @@ const KM_TO_MILES: f64 = 0.621371;
 fn main() -> Result<()> {
     // --- Check for completion generation request FIRST ---
     let cli_args = cli::parse_args(); // Parse arguments once
+    let export_csv = cli_args.export_csv;
 
     if let cli::Commands::GenerateCompletion { shell } = cli_args.command {
         let mut cmd = cli::build_cli_command(); // Get the command structure
@@ -213,10 +215,14 @@ fn main() -> Result<()> {
                     println!("No workouts found matching the criteria.");
                 }
                 Ok(workouts) => {
-                    let header_color = workout_tracker_lib::parse_color(&service.config.theme.header_color)
+                    if export_csv {
+                        print_workout_csv(workouts, service.config.units)?;
+                    } else {
+                        let header_color = task_athlete_lib::parse_color(&service.config.theme.header_color)
                         .map(Color::from)
                         .unwrap_or(Color::Green); // Fallback
-                    print_workout_table(workouts, header_color, service.config.units);
+                        print_workout_table(workouts, header_color, service.config.units);
+                    }
                 }
                  Err(e) => {
                      // Handle specific case where exercise filter didn't find the exercise
@@ -233,7 +239,13 @@ fn main() -> Result<()> {
         }
          cli::Commands::Stats { exercise } => {
             match service.get_exercise_stats(&exercise) {
-                Ok(stats) => print_exercise_stats(&stats, service.config.units),
+                Ok(stats) => {
+                    if export_csv {
+                        print_stats_csv(&stats, service.config.units)?;
+                    } else {
+                        print_exercise_stats(&stats, service.config.units);
+                    }
+                }
                 Err(e) => {
                     // Handle specific "not found" errors gracefully
                     if let Some(db_err) = e.downcast_ref::<DbError>() {
@@ -278,7 +290,11 @@ fn main() -> Result<()> {
 
             match service.calculate_daily_volume(filters) {
                 Ok(volume_data) if volume_data.is_empty() => {
-                    println!("No workout volume found matching the criteria.");
+                    if export_csv {
+                         print_volume_csv(volume_data, service.config.units)?;
+                    } else {
+                        print_volume_table(volume_data, service.config.units);
+                    }
                 }
                 Ok(volume_data) => {
                      print_volume_table(volume_data, service.config.units);
@@ -293,10 +309,14 @@ fn main() -> Result<()> {
                     println!("No exercise definitions found matching the criteria.");
                 }
                 Ok(exercises) => {
-                     let header_color = workout_tracker_lib::parse_color(&service.config.theme.header_color)
-                         .map(Color::from)
-                         .unwrap_or(Color::Cyan); // Fallback
-                     print_exercise_definition_table(exercises, header_color);
+                    if export_csv {
+                        print_exercise_definition_csv(exercises)?;
+                    } else {
+                         let header_color = task_athlete_lib::parse_color(&service.config.theme.header_color)
+                             .map(Color::from)
+                             .unwrap_or(Color::Cyan); // Fallback
+                         print_exercise_definition_table(exercises, header_color);
+                     }
                 }
                 Err(e) => bail!("Error listing exercises: {}", e),
             }
@@ -317,7 +337,13 @@ fn main() -> Result<()> {
         }
         cli::Commands::ListAliases => {
             match service.list_aliases() {
-                Ok(aliases) if aliases.is_empty() => println!("No aliases defined."),
+                Ok(aliases) if aliases.is_empty() => {
+                    if export_csv {
+                        print_alias_csv(aliases)?; // Print header only
+                    } else {
+                        println!("No aliases defined.");
+                    }
+                }
                 Ok(aliases) => print_alias_table(aliases),
                 Err(e) => bail!("Error listing aliases: {}", e),
             }
@@ -475,7 +501,7 @@ fn handle_pb_notification(service: &mut AppService, pb_info: &PBInfo, units: Uni
 }
 
 /// Prints the formatted PB message based on achieved PBs and config settings.
-fn print_pb_message(pb_info: &PBInfo, units: Units, config: &workout_tracker_lib::Config) {
+fn print_pb_message(pb_info: &PBInfo, units: Units, config: &task_athlete_lib::Config) {
     let mut messages = Vec::new();
 
     if pb_info.achieved_weight_pb && config.notify_pb_weight {
@@ -659,7 +685,7 @@ fn print_alias_table(aliases: std::collections::HashMap<String, String>) {
 /// Prints workout volume in a table
 fn print_volume_table(volume_data: Vec<(NaiveDate, String, f64)>, units: Units) {
     let mut table = Table::new();
-    let header_color = workout_tracker_lib::parse_color("Yellow") // Use a different color for volume
+    let header_color = task_athlete_lib::parse_color("Yellow") // Use a different color for volume
         .map(Color::from)
         .unwrap_or(Color::Yellow);
 
@@ -766,4 +792,160 @@ fn print_exercise_stats(stats: &ExerciseStats, units: Units) {
         println!("No personal bests recorded for this exercise yet.");
     }
     println!(); // Add a blank line at the end
+}
+
+
+fn print_workout_csv(workouts: Vec<Workout>, units: Units) -> Result<()> {
+    let mut writer = csv::Writer::from_writer(io::stdout());
+    let weight_unit_str = match units { Units::Metric => "kg", Units::Imperial => "lbs", };
+    let distance_unit_str = match units { Units::Metric => "km", Units::Imperial => "miles", };
+
+    // Write header
+    writer.write_record(&[
+        "ID",
+        "Timestamp_UTC",
+        "Exercise",
+        "Type",
+        "Sets",
+        "Reps",
+        &format!("Weight_{}", weight_unit_str),
+        "Duration_min",
+        &format!("Distance_{}", distance_unit_str),
+        "Notes",
+    ])?;
+
+    for workout in workouts {
+        // Convert distance for display if necessary
+        let display_distance = workout.distance.map(|km| match units {
+            Units::Metric => km,
+            Units::Imperial => km * KM_TO_MILES,
+        });
+
+        writer.write_record(&[
+            workout.id.to_string(),
+            workout.timestamp.to_rfc3339(), // Use ISO 8601/RFC3339 for CSV
+            workout.exercise_name,
+            workout.exercise_type.map_or("".to_string(), |t| t.to_string()),
+            workout.sets.map_or("".to_string(), |v| v.to_string()),
+            workout.reps.map_or("".to_string(), |v| v.to_string()),
+            workout.weight.map_or("".to_string(), |v| format!("{:.2}", v)),
+            workout.duration_minutes.map_or("".to_string(), |v| v.to_string()),
+            display_distance.map_or("".to_string(), |v| format!("{:.2}", v)),
+            workout.notes.as_deref().unwrap_or("").to_string(), // Convert Option<&str> to String
+        ])?;
+    }
+
+    writer.flush()?;
+    Ok(())
+}
+
+
+fn print_alias_csv(aliases: std::collections::HashMap<String, String>) -> Result<()> {
+    let mut writer = csv::Writer::from_writer(io::stdout());
+
+    // Write header
+    writer.write_record(&[
+        "Alias",
+        "Canonical_Exercise_Name",
+    ])?;
+
+    // Sort aliases for consistent output
+    let mut sorted_aliases: Vec<_> = aliases.into_iter().collect();
+    sorted_aliases.sort_by(|a, b| a.0.cmp(&b.0));
+
+    for (alias, canonical_name) in sorted_aliases {
+        writer.write_record(&[alias, canonical_name])?;
+    }
+    writer.flush()?;
+    Ok(())
+}
+
+fn print_volume_csv(volume_data: Vec<(NaiveDate, String, f64)>, units: Units) -> Result<()> {
+    let mut writer = csv::Writer::from_writer(io::stdout());
+    let weight_unit_str = match units {
+        Units::Metric => "kg",
+        Units::Imperial => "lbs",
+    };
+
+    // Write header
+    writer.write_record(&[
+        "Date",
+        "Exercise",
+        &format!("Volume_Sets*Reps*Weight_{}", weight_unit_str),
+    ])?;
+
+    for (date, exercise_name, volume) in volume_data { // Destructure tuple
+        writer.write_record(&[
+            date.format("%Y-%m-%d").to_string(),
+            exercise_name,
+            format!("{:.2}", volume),
+        ])?;
+    }
+    writer.flush()?;
+    Ok(())
+ }
+
+fn print_stats_csv(stats: &ExerciseStats, units: Units) -> Result<()> {
+    let mut writer = csv::Writer::from_writer(io::stdout());
+
+    // Write header
+    writer.write_record(&["Statistic", "Value"])?;
+
+    // Write main stats
+    writer.write_record(&["Exercise_Name", &stats.canonical_name])?;
+    writer.write_record(&["Total_Workouts", &stats.total_workouts.to_string()])?;
+    writer.write_record(&["First_Workout", &stats.first_workout_date.map_or("N/A".to_string(), |d| d.format("%Y-%m-%d").to_string())])?;
+    writer.write_record(&["Last_Workout", &stats.last_workout_date.map_or("N/A".to_string(), |d| d.format("%Y-%m-%d").to_string())])?;
+    writer.write_record(&["Avg_Workouts_Per_Week", &stats.avg_workouts_per_week.map_or("N/A".to_string(), |avg| format!("{:.2}", avg))])?;
+    writer.write_record(&["Longest_Gap_Days", &stats.longest_gap_days.map_or("N/A".to_string(), |gap| gap.to_string())])?;
+    writer.write_record(&["Streak_Interval_Days", &stats.streak_interval_days.to_string()])?;
+    writer.write_record(&["Current_Streak", &stats.current_streak.to_string()])?;
+    writer.write_record(&["Longest_Streak", &stats.longest_streak.to_string()])?;
+
+    // Write Personal Bests
+    let weight_unit_str = match units { Units::Metric => "kg", Units::Imperial => "lbs", };
+    let distance_unit_str = match units { Units::Metric => "km", Units::Imperial => "miles", };
+
+    if let Some(pb_weight) = stats.personal_bests.max_weight {
+        writer.write_record(&[&format!("PB_Max_Weight_{}", weight_unit_str), &format!("{:.2}", pb_weight)])?;
+    }
+    if let Some(pb_reps) = stats.personal_bests.max_reps {
+        writer.write_record(&["PB_Max_Reps", &pb_reps.to_string()])?;
+    }
+    if let Some(pb_duration) = stats.personal_bests.max_duration_minutes {
+        writer.write_record(&["PB_Max_Duration_min", &pb_duration.to_string()])?;
+    }
+    if let Some(pb_distance_km) = stats.personal_bests.max_distance_km {
+        let (dist_val, dist_unit) = match units {
+            Units::Metric => (pb_distance_km, distance_unit_str),
+            Units::Imperial => (pb_distance_km * KM_TO_MILES, distance_unit_str),
+        };
+        writer.write_record(&[&format!("PB_Max_Distance_{}", dist_unit), &format!("{:.2}", dist_val)])?;
+    }
+
+    writer.flush()?;
+    Ok(())
+}
+
+fn print_exercise_definition_csv(exercises: Vec<ExerciseDefinition>) -> Result<()> {
+    let mut writer = csv::Writer::from_writer(io::stdout());
+
+    // Write header
+    writer.write_record(&[
+        "ID",
+        "Name",
+        "Type",
+        "Muscles",
+    ])?;
+
+    for exercise in exercises {
+        writer.write_record(&[
+            exercise.id.to_string(),
+            exercise.name,
+            exercise.type_.to_string(), // Uses Display impl from lib
+            exercise.muscles.as_deref().unwrap_or("").to_string(),
+        ])?;
+    }
+    writer.flush()?;
+    Ok(())
 }

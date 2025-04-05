@@ -1,9 +1,8 @@
 use anyhow::Result;
-use chrono::{Utc, Duration, NaiveDate}; // Import NaiveDate
-use workout_tracker_lib::{
+use chrono::{Utc, Duration, NaiveDate};
+use task_athlete_lib::{
     AppService, Config, ConfigError, DbError, ExerciseType, Units,
-    WorkoutFilters, VolumeFilters, PBInfo, // Removed PBType
-    ExerciseStats, PersonalBests // Removed PbMetricScope, added stats types
+    WorkoutFilters, VolumeFilters
 };
 use std::thread; // For adding delays in PB tests
 use std::time::Duration as StdDuration; // For delays
@@ -15,7 +14,7 @@ fn create_test_service() -> Result<AppService> {
     // Create an in-memory database for testing
     // Need a mutable connection to pass to init_db
     let mut conn = rusqlite::Connection::open_in_memory()?;
-    workout_tracker_lib::db::init_db(&mut conn)?; // Pass mutable conn
+    task_athlete_lib::db::init_db(&mut conn)?; // Pass mutable conn
 
     // Create a default config for testing
     let config = Config {
@@ -43,7 +42,7 @@ fn create_test_service() -> Result<AppService> {
 // This is a bit of a hack because AppService owns its connection.
 fn create_mutable_conn_to_test_db() -> Result<Connection> {
      let mut conn = rusqlite::Connection::open_in_memory()?;
-     workout_tracker_lib::db::init_db(&mut conn)?; // Ensure schema is initialized
+     task_athlete_lib::db::init_db(&mut conn)?; // Ensure schema is initialized
      Ok(conn)
 }
 

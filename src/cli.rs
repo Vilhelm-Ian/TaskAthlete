@@ -1,5 +1,3 @@
-//src/cli.rs
-// src/cli.rs
 use clap::{Parser, Subcommand, ValueEnum, CommandFactory};
 use chrono::{NaiveDate, Utc, Duration};
 use clap_complete::Shell;
@@ -156,7 +154,7 @@ pub enum Commands {
     /// Delete a workout entry
     DeleteWorkout {
         /// ID of the workout to delete
-        id: i64,
+        ids: Vec<i64>,
     },
     /// List workout entries with filters
     List {

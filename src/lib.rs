@@ -591,13 +591,18 @@ impl AppService {
 
 
     /// Deletes a workout entry by ID.
-    pub fn delete_workout(&self, id: i64) -> Result<u64> {
+    pub fn delete_workouts(&self, ids: &Vec<i64>) -> Result<Vec<u64>> {
         // Call function from db module
-        db::delete_workout(&self.conn, id)
-             .map_err(|db_err| match db_err {
-                  DbError::WorkoutNotFound(_) => anyhow::anyhow!(db_err), // Keep specific error
-                  _ => anyhow::Error::new(db_err).context(format!("Failed to delete workout ID {}", id)),
-             })
+        let mut workouts_delete = vec![];
+        for id in ids {
+            db::delete_workout(&self.conn, *id)
+                 .map_err(|db_err| match db_err {
+                      DbError::WorkoutNotFound(_) => anyhow::anyhow!(db_err), // Keep specific error
+                      _ => anyhow::Error::new(db_err).context(format!("Failed to delete workout ID {}", id)),
+                 })?;
+             workouts_delete.push(*id as u64);
+         };
+         Ok(workouts_delete)
     }
 
     /// Lists workouts based on filters. Resolves exercise identifier if provided.

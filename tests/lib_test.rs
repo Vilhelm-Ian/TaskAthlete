@@ -831,7 +831,7 @@ fn test_workout_not_found() -> Result<()> {
 
 
     // Try to delete non-existent workout
-    let result = service.delete_workout(999);
+    let result = service.delete_workouts(&vec![999]);
     assert!(result.is_err());
     //  match result.unwrap_err().downcast_ref::<DbError>() {
     //     Some(DbError::WorkoutNotFound(999)) => (), // Correct error and ID

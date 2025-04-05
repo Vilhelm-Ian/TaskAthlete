@@ -173,11 +173,12 @@ fn main() -> Result<()> {
                 Err(e) => bail!("Error editing workout ID {}: {}", id, e),
             }
         }
-        cli::Commands::DeleteWorkout { id } => {
-            match service.delete_workout(id) {
+        cli::Commands::DeleteWorkout { ids } => {
+            match service.delete_workouts(&ids) {
                 // Ok(0) case handled by Err(DbError::NotFound) from service
-                Ok(rows) => println!("Successfully deleted workout ID {} ({} row(s) affected).", id, rows),
-                Err(e) => bail!("Error deleting workout ID {}: {}", id, e),
+                Ok(rows) => println!("Successfully deleted workout ID {:?} ({} row(s) affected).", ids, rows.len()),
+                Err(e) => bail!("Error deleting workout: {}", e),
+                // Err(e) => bail!("Error deleting workout ID {}: {}", id, e),
             }
         }
 

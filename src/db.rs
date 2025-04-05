@@ -303,7 +303,6 @@ pub fn update_workout(
     if new_notes.is_some() { updates.push("notes = :notes"); params_map.insert(":notes".into(), Box::new(new_notes)); }
     if let Some(ts) = new_timestamp { updates.push("timestamp = :ts"); params_map.insert(":ts".into(), Box::new(ts.to_rfc3339())); }
 
-    if updates.is_empty() { return Ok(0); } // No updates specified
 
     let sql = format!("UPDATE workouts SET {} WHERE id = :id", updates.join(", "));
     params_map.insert(":id".into(), Box::new(id));

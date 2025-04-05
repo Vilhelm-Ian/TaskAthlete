@@ -4,14 +4,13 @@ mod cli; // Keep cli module for parsing args
 use csv;
 use anyhow::{bail, Context, Result};
 use chrono::{Utc, Duration, NaiveDate}; // Keep Duration if needed, remove if not
-use comfy_table::{presets::UTF8_FULL, Cell, Color, ContentArrangement, Table, Attribute, CellAlignment};
+use comfy_table::{presets::UTF8_FULL, Cell, Color, ContentArrangement, Table, Attribute};
 use std::io::{stdin, Write, stdout}; // For prompts
 use std::io;
-use std::collections::HashMap;
 
-use workout_tracker_lib::{
+use task_athlete_lib::{
     AppService, ConfigError, ExerciseDefinition, ExerciseType, Units, Workout, WorkoutFilters,
-    PBInfo, VolumeFilters, DbError, ExerciseStats, PersonalBests // Import PB types, DbError, Stats types
+    PBInfo, VolumeFilters, DbError, ExerciseStats // Import PB types, DbError, Stats types
 };
 
 // Constants for display units
@@ -219,7 +218,7 @@ fn main() -> Result<()> {
                     if export_csv {
                         print_workout_csv(workouts, service.config.units)?;
                     } else {
-                        let header_color = workout_tracker_lib::parse_color(&service.config.theme.header_color)
+                        let header_color = task_athlete_lib::parse_color(&service.config.theme.header_color)
                         .map(Color::from)
                         .unwrap_or(Color::Green); // Fallback
                         print_workout_table(workouts, header_color, service.config.units);
@@ -313,7 +312,7 @@ fn main() -> Result<()> {
                     if export_csv {
                         print_exercise_definition_csv(exercises)?;
                     } else {
-                         let header_color = workout_tracker_lib::parse_color(&service.config.theme.header_color)
+                         let header_color = task_athlete_lib::parse_color(&service.config.theme.header_color)
                              .map(Color::from)
                              .unwrap_or(Color::Cyan); // Fallback
                          print_exercise_definition_table(exercises, header_color);
@@ -502,7 +501,7 @@ fn handle_pb_notification(service: &mut AppService, pb_info: &PBInfo, units: Uni
 }
 
 /// Prints the formatted PB message based on achieved PBs and config settings.
-fn print_pb_message(pb_info: &PBInfo, units: Units, config: &workout_tracker_lib::Config) {
+fn print_pb_message(pb_info: &PBInfo, units: Units, config: &task_athlete_lib::Config) {
     let mut messages = Vec::new();
 
     if pb_info.achieved_weight_pb && config.notify_pb_weight {
@@ -686,7 +685,7 @@ fn print_alias_table(aliases: std::collections::HashMap<String, String>) {
 /// Prints workout volume in a table
 fn print_volume_table(volume_data: Vec<(NaiveDate, String, f64)>, units: Units) {
     let mut table = Table::new();
-    let header_color = workout_tracker_lib::parse_color("Yellow") // Use a different color for volume
+    let header_color = task_athlete_lib::parse_color("Yellow") // Use a different color for volume
         .map(Color::from)
         .unwrap_or(Color::Yellow);
 

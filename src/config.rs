@@ -1,5 +1,5 @@
 //src/config.rs
-use anyhow::{Context, Result};
+use anyhow::Result;
 use comfy_table::Color;
 use serde::{Deserialize, Serialize};
 use std::fs;

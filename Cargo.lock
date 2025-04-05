@@ -3,25 +3,6 @@
 version = 3
 
 [[package]]
-name = "TaskAthlete"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "clap",
- "clap_complete",
- "comfy-table",
- "csv",
- "dirs",
- "rusqlite",
- "serde",
- "strum",
- "strum_macros",
- "thiserror",
- "toml",
-]
-
-[[package]]
 name = "ahash"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -690,6 +671,25 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "task-athlete"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "clap_complete",
+ "comfy-table",
+ "csv",
+ "dirs",
+ "rusqlite",
+ "serde",
+ "strum",
+ "strum_macros",
+ "thiserror",
+ "toml",
 ]
 
 [[package]]

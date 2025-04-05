@@ -685,7 +685,7 @@ impl AppService {
         if total_workouts > 1 {
             let mut max_gap: i64 = 0;
             for i in 1..total_workouts {
-                let gap = (timestamps[i].date_naive() - timestamps[i - 1].date_naive()).num_days();
+                let gap = (timestamps[i].date_naive() - timestamps[i - 1].date_naive()).num_days() - 1;
                 if gap > max_gap {
                     max_gap = gap;
                 }

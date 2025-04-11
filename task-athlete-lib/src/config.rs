@@ -5,9 +5,9 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{stdin, Write};
 use std::path::{Path, PathBuf};
-use thiserror::Error;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
+use thiserror::Error;
 
 const CONFIG_FILE_NAME: &str = "config.toml";
 const APP_CONFIG_DIR: &str = "workout-tracker-cli";
@@ -31,14 +31,14 @@ pub enum ConfigError {
     BodyweightPromptCancelled,
     #[error("Invalid bodyweight input: {0}")]
     InvalidBodyweightInput(String),
-    #[error("Personal best notification setting not configured. Please enable/disable using 'set-pb-notification true|false'.")] // Feature 4
+    #[error("Personal best notification setting not configured. Please enable/disable using 'set-pb-notification true|false'.")]
+    // Feature 4
     PbNotificationNotSet,
     #[error("Personal best notification prompt cancelled by user.")] // Feature 4
     PbNotificationPromptCancelled,
     #[error("Invalid input for PB notification prompt: {0}")] // Feature 4
     InvalidPbNotificationInput(String),
 }
-
 
 // Note: PbMetricScope removed as specific booleans are used now.
 //       Kept the enum definition commented out in case of future refactoring.
@@ -51,7 +51,6 @@ pub enum ConfigError {
 //     // Note: Disabling notifications entirely is handled by notify_on_pb = false
 // }
 // impl Default for PbMetricScope { fn default() -> Self { PbMetricScope::All } }
-
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -70,22 +69,44 @@ impl Default for Units {
 // Define standard colors using strum for easy iteration/parsing
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter)]
 pub enum StandardColor {
-    Black, Red, Green, Yellow, Blue, Magenta, Cyan, White,
-    DarkGrey, DarkRed, DarkGreen, DarkYellow, DarkBlue, DarkMagenta, DarkCyan, Grey,
+    Black,
+    Red,
+    Green,
+    Yellow,
+    Blue,
+    Magenta,
+    Cyan,
+    White,
+    DarkGrey,
+    DarkRed,
+    DarkGreen,
+    DarkYellow,
+    DarkBlue,
+    DarkMagenta,
+    DarkCyan,
+    Grey,
 }
 
 // Helper to convert our enum to comfy_table::Color
 impl From<StandardColor> for Color {
     fn from(value: StandardColor) -> Self {
         match value {
-            StandardColor::Black => Color::Black, StandardColor::Red => Color::Red,
-            StandardColor::Green => Color::Green, StandardColor::Yellow => Color::Yellow,
-            StandardColor::Blue => Color::Blue, StandardColor::Magenta => Color::Magenta,
-            StandardColor::Cyan => Color::Cyan, StandardColor::White => Color::White,
-            StandardColor::DarkGrey => Color::DarkGrey, StandardColor::DarkRed => Color::DarkRed,
-            StandardColor::DarkGreen => Color::DarkGreen, StandardColor::DarkYellow => Color::DarkYellow,
-            StandardColor::DarkBlue => Color::DarkBlue, StandardColor::DarkMagenta => Color::DarkMagenta,
-            StandardColor::DarkCyan => Color::DarkCyan, StandardColor::Grey => Color::Grey,
+            StandardColor::Black => Color::Black,
+            StandardColor::Red => Color::Red,
+            StandardColor::Green => Color::Green,
+            StandardColor::Yellow => Color::Yellow,
+            StandardColor::Blue => Color::Blue,
+            StandardColor::Magenta => Color::Magenta,
+            StandardColor::Cyan => Color::Cyan,
+            StandardColor::White => Color::White,
+            StandardColor::DarkGrey => Color::DarkGrey,
+            StandardColor::DarkRed => Color::DarkRed,
+            StandardColor::DarkGreen => Color::DarkGreen,
+            StandardColor::DarkYellow => Color::DarkYellow,
+            StandardColor::DarkBlue => Color::DarkBlue,
+            StandardColor::DarkMagenta => Color::DarkMagenta,
+            StandardColor::DarkCyan => Color::DarkCyan,
+            StandardColor::Grey => Color::Grey,
         }
     }
 }
@@ -108,7 +129,9 @@ pub struct ThemeConfig {
 
 impl Default for ThemeConfig {
     fn default() -> Self {
-        ThemeConfig { header_color: "Green".to_string() }
+        ThemeConfig {
+            header_color: "Green".to_string(),
+        }
     }
 }
 
@@ -118,7 +141,7 @@ pub struct Config {
     pub bodyweight: Option<f64>,
     pub units: Units,
     pub prompt_for_bodyweight: bool, // Default is true
-    pub streak_interval_days: u32, // Default 1
+    pub streak_interval_days: u32,   // Default 1
 
     // PB Notification Settings
     pub notify_pb_enabled: Option<bool>, // None = prompt first time, Some(true/false) = user setting
@@ -126,6 +149,7 @@ pub struct Config {
     pub notify_pb_reps: bool,
     pub notify_pb_duration: bool,
     pub notify_pb_distance: bool,
+    pub target_bodyweight: Option<f64>,
 
     // Theming
     pub theme: ThemeConfig,
@@ -144,6 +168,7 @@ impl Default for Config {
             notify_pb_reps: true,        // Default to true
             notify_pb_duration: true,    // Default to true
             notify_pb_distance: true,    // Default to true
+            target_bodyweight: None,
             theme: ThemeConfig::default(),
         }
     }
@@ -159,7 +184,7 @@ impl Config {
 /// Determines the path to the configuration file.
 /// Exposed at crate root as get_config_path_util
 pub fn get_config_path() -> Result<PathBuf, ConfigError> {
-     let config_dir_override = std::env::var(CONFIG_ENV_VAR).ok();
+    let config_dir_override = std::env::var(CONFIG_ENV_VAR).ok();
 
     let config_dir_path = match config_dir_override {
         Some(path_str) => {
@@ -170,12 +195,13 @@ pub fn get_config_path() -> Result<PathBuf, ConfigError> {
                     CONFIG_ENV_VAR,
                     path.display()
                  );
-                 fs::create_dir_all(&path)?;
+                fs::create_dir_all(&path)?;
             }
             path
         }
         None => {
-            let base_config_dir = dirs::config_dir().ok_or(ConfigError::CannotDetermineConfigDir)?;
+            let base_config_dir =
+                dirs::config_dir().ok_or(ConfigError::CannotDetermineConfigDir)?;
             base_config_dir.join(APP_CONFIG_DIR)
         }
     };
@@ -191,16 +217,16 @@ pub fn get_config_path() -> Result<PathBuf, ConfigError> {
 /// Exposed at crate root as load_config_util
 pub fn load_config(config_path: &Path) -> Result<Config, ConfigError> {
     if !config_path.exists() {
-         // Don't print here, let caller decide how to inform user
-         let default_config = Config::new_default();
-         save_config(&config_path, &default_config)?;
-         Ok(default_config)
+        // Don't print here, let caller decide how to inform user
+        let default_config = Config::new_default();
+        save_config(&config_path, &default_config)?;
+        Ok(default_config)
     } else {
-         let config_content = fs::read_to_string(&config_path)?;
-         // Use serde(default) to handle missing fields when parsing
-         let config: Config = toml::from_str(&config_content).map_err(ConfigError::TomlParse)?;
-         // No need to manually fill defaults here if using #[serde(default)] on struct and fields
-         Ok(config)
+        let config_content = fs::read_to_string(&config_path)?;
+        // Use serde(default) to handle missing fields when parsing
+        let config: Config = toml::from_str(&config_content).map_err(ConfigError::TomlParse)?;
+        // No need to manually fill defaults here if using #[serde(default)] on struct and fields
+        Ok(config)
     }
 }
 
@@ -215,46 +241,4 @@ pub fn save_config(config_path: &Path, config: &Config) -> Result<(), ConfigErro
     let config_content = toml::to_string_pretty(config).map_err(ConfigError::TomlSerialize)?;
     fs::write(config_path, config_content)?;
     Ok(())
-}
-
- /// Prompts the user for bodyweight if needed and updates the config.
- /// This function should ideally live in the UI layer (main.rs or tui).
- /// It's kept here temporarily but marked for potential removal from lib.
- /// *** Consider moving this interactive logic to the caller (e.g., main.rs) ***
- /// Note: This function is NOT directly used by AppService, it's intended for potential CLI use.
-pub fn prompt_and_set_bodyweight_interactive(config: &mut Config, config_path: &PathBuf) -> Result<f64, ConfigError> {
-    // Check if we need to prompt (Only if bodyweight is None AND prompting is enabled)
-    if config.bodyweight.is_some() || !config.prompt_for_bodyweight {
-        return config.bodyweight.ok_or_else(|| ConfigError::BodyweightNotSet(config_path.clone()));
-    }
-
-    // Prompt is needed
-    println!("Bodyweight is required for this exercise type but is not set.");
-    println!("Please enter your current bodyweight (in {:?}).", config.units);
-    print!("Enter weight, or 'N' to not be asked again (use 'set-bodyweight' later): ");
-    std::io::stdout().flush()?; // Ensure the prompt is displayed before reading input
-
-    let mut input = String::new();
-    stdin().read_line(&mut input)?;
-    let trimmed_input = input.trim();
-
-    if trimmed_input.eq_ignore_ascii_case("n") {
-        println!("Okay, disabling future bodyweight prompts for 'add' command.");
-        println!("Please use the 'set-bodyweight <weight>' command to set it manually.");
-        config.prompt_for_bodyweight = false;
-        save_config(config_path, config)?; // Save the updated prompt setting
-        Err(ConfigError::BodyweightPromptCancelled) // Indicate cancellation
-    } else {
-        match trimmed_input.parse::<f64>() {
-            Ok(weight) if weight > 0.0 => {
-                println!("Setting bodyweight to {} {:?}", weight, config.units);
-                config.bodyweight = Some(weight);
-                config.prompt_for_bodyweight = true; // Keep prompting enabled unless N is entered
-                save_config(config_path, config)?; // Save the new weight and prompt setting
-                Ok(weight)
-            }
-            Ok(_) => Err(ConfigError::InvalidBodyweightInput("Weight must be a positive number.".to_string())),
-            Err(e) => Err(ConfigError::InvalidBodyweightInput(format!("Could not parse '{}': {}", trimmed_input, e))),
-        }
-    }
 }

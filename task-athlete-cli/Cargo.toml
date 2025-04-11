@@ -1,0 +1,18 @@
+[package]
+name = "task-athlete-cli"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]] # Explicitly define the binary name if desired
+name = "ta" # Or task-athlete, workout-tracker etc.
+path = "src/main.rs"
+
+[dependencies]
+task-athlete-lib = { path = "../task-athlete-lib" } # Depend on the library
+anyhow = "1.0"
+chrono = "0.4"
+clap = { version = "4.5", features = ["derive"] }
+clap_complete = "4.5"
+comfy-table = "7.1" # CLI uses comfy-table for output
+csv = "1.3"
+# No ratatui or crossterm here

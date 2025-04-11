@@ -1,7 +1,7 @@
 //src/db.rs
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, NaiveDate, Utc};
-use rusqlite::{params, Connection, OptionalExtension, Row, ToSql, named_params}; // Import named_params
+use rusqlite::{named_params, params, Connection, OptionalExtension, Row, ToSql}; // Import named_params
 use std::collections::HashMap; // For listing aliases
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -67,39 +67,80 @@ pub fn calculate_daily_volume_filtered(
                 END) as daily_volume
         FROM workouts w
         LEFT JOIN exercises e ON w.exercise_name = e.name
-        WHERE 1=1".to_string();
+        WHERE 1=1"
+        .to_string();
 
     let mut params_map: HashMap<String, Box<dyn ToSql>> = HashMap::new();
 
-    if let Some(name) = filters.exercise_name { sql.push_str(" AND w.exercise_name = :ex_name COLLATE NOCASE"); params_map.insert(":ex_name".into(), Box::new(name.to_string())); }
-    if let Some(start) = filters.start_date { sql.push_str(" AND date(w.timestamp) >= date(:start_date)"); params_map.insert(":start_date".into(), Box::new(start.format("%Y-%m-%d").to_string())); }
-    if let Some(end) = filters.end_date { sql.push_str(" AND date(w.timestamp) <= date(:end_date)"); params_map.insert(":end_date".into(), Box::new(end.format("%Y-%m-%d").to_string())); }
-    if let Some(ex_type) = filters.exercise_type { sql.push_str(" AND e.type = :ex_type"); params_map.insert(":ex_type".into(), Box::new(ex_type.to_string())); }
-    if let Some(m) = filters.muscle { sql.push_str(" AND e.muscles LIKE :muscle"); params_map.insert(":muscle".into(), Box::new(format!("%{}%", m))); }
+    if let Some(name) = filters.exercise_name {
+        sql.push_str(" AND w.exercise_name = :ex_name COLLATE NOCASE");
+        params_map.insert(":ex_name".into(), Box::new(name.to_string()));
+    }
+    if let Some(start) = filters.start_date {
+        sql.push_str(" AND date(w.timestamp) >= date(:start_date)");
+        params_map.insert(
+            ":start_date".into(),
+            Box::new(start.format("%Y-%m-%d").to_string()),
+        );
+    }
+    if let Some(end) = filters.end_date {
+        sql.push_str(" AND date(w.timestamp) <= date(:end_date)");
+        params_map.insert(
+            ":end_date".into(),
+            Box::new(end.format("%Y-%m-%d").to_string()),
+        );
+    }
+    if let Some(ex_type) = filters.exercise_type {
+        sql.push_str(" AND e.type = :ex_type");
+        params_map.insert(":ex_type".into(), Box::new(ex_type.to_string()));
+    }
+    if let Some(m) = filters.muscle {
+        sql.push_str(" AND e.muscles LIKE :muscle");
+        params_map.insert(":muscle".into(), Box::new(format!("%{}%", m)));
+    }
 
     // Group by date AND exercise name to sum volume correctly per exercise per day
-    sql.push_str(" GROUP BY workout_date, w.exercise_name ORDER BY workout_date DESC, w.exercise_name ASC");
+    sql.push_str(
+        " GROUP BY workout_date, w.exercise_name ORDER BY workout_date DESC, w.exercise_name ASC",
+    );
 
     // Limit the *number of rows* returned (each row is one exercise on one day)
     // Note: This isn't limiting distinct days directly if one day has multiple exercises.
     // Limiting distinct days would require a subquery, which adds complexity.
     // Let's keep limiting rows for simplicity for now.
-    if filters.start_date.is_none() && filters.end_date.is_none() { // Apply limit only if no date range specified
-        if let Some(limit) = filters.limit_days { sql.push_str(" LIMIT :limit"); params_map.insert(":limit".into(), Box::new(limit)); }
+    if filters.start_date.is_none() && filters.end_date.is_none() {
+        // Apply limit only if no date range specified
+        if let Some(limit) = filters.limit_days {
+            sql.push_str(" LIMIT :limit");
+            params_map.insert(":limit".into(), Box::new(limit));
+        }
     }
 
-    let params_for_query: Vec<(&str, &dyn ToSql)> = params_map.iter().map(|(k, v)| (k.as_str(), v.as_ref())).collect();
+    let params_for_query: Vec<(&str, &dyn ToSql)> = params_map
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_ref()))
+        .collect();
 
     let mut stmt = conn.prepare(&sql).map_err(DbError::QueryFailed)?;
-    let volume_iter = stmt.query_map(params_for_query.as_slice(), |row| {
-        let date_str: String = row.get(0)?;
-        let date = NaiveDate::parse_from_str(&date_str, "%Y-%m-%d").map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?;
-        let exercise_name: String = row.get(1)?; // Get exercise name
-        let volume: f64 = row.get(2)?; // Volume is now the 3rd column (index 2)
-        Ok((date, exercise_name, volume))
-    }).map_err(DbError::QueryFailed)?;
+    let volume_iter = stmt
+        .query_map(params_for_query.as_slice(), |row| {
+            let date_str: String = row.get(0)?;
+            let date = NaiveDate::parse_from_str(&date_str, "%Y-%m-%d").map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    0,
+                    rusqlite::types::Type::Text,
+                    Box::new(e),
+                )
+            })?;
+            let exercise_name: String = row.get(1)?; // Get exercise name
+            let volume: f64 = row.get(2)?; // Volume is now the 3rd column (index 2)
+            Ok((date, exercise_name, volume))
+        })
+        .map_err(DbError::QueryFailed)?;
 
-    volume_iter.collect::<Result<Vec<_>, _>>().map_err(DbError::QueryFailed)
+    volume_iter
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(DbError::QueryFailed)
 }
 
 #[derive(Debug)]
@@ -123,7 +164,6 @@ pub struct ExerciseDefinition {
     pub type_: ExerciseType,
     pub muscles: Option<String>,
 }
-
 
 // Custom Error type for DB operations
 #[derive(Error, Debug)]
@@ -206,7 +246,7 @@ pub fn init_db(conn: &Connection) -> Result<(), DbError> {
         [],
     ).map_err(DbError::Connection)?;
 
-     conn.execute(
+    conn.execute(
         "CREATE TABLE IF NOT EXISTS aliases ( -- Feature 1
             alias_name TEXT PRIMARY KEY NOT NULL COLLATE NOCASE, -- Alias is unique, case-insensitive
             exercise_name TEXT NOT NULL COLLATE NOCASE -- Canonical exercise name it refers to
@@ -214,13 +254,40 @@ pub fn init_db(conn: &Connection) -> Result<(), DbError> {
             -- This would auto-update/delete aliases if the exercise name changes or is deleted.
             -- Requires robust transaction handling in exercise edit/delete. Let's manage manually for now.
         )",
+        [],).map_err(DbError::Connection)?;
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS bodyweights (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL UNIQUE, -- Store as RFC3339 string, unique timestamp
+            weight REAL NOT NULL -- Store weight (assumed in config units, but DB doesn't enforce)
+        )",
         [],
-    ).map_err(DbError::Connection)?;
+    )
+    .map_err(DbError::Connection)?;
 
     // Add indexes for common lookups
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_workouts_timestamp ON workouts(timestamp)", []).map_err(DbError::Connection)?;
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_workouts_exercise_name ON workouts(exercise_name)", []).map_err(DbError::Connection)?;
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_aliases_exercise_name ON aliases(exercise_name)", []).map_err(DbError::Connection)?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_workouts_timestamp ON workouts(timestamp)",
+        [],
+    )
+    .map_err(DbError::Connection)?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_workouts_exercise_name ON workouts(exercise_name)",
+        [],
+    )
+    .map_err(DbError::Connection)?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_aliases_exercise_name ON aliases(exercise_name)",
+        [],
+    )
+    .map_err(DbError::Connection)?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_bodyweights_timestamp ON bodyweights(timestamp)",
+        [],
+    )
+    .map_err(DbError::Connection)?;
 
     // Add distance column if it doesn't exist (for upgrading existing databases)
     add_distance_column_if_not_exists(conn)?;
@@ -251,14 +318,17 @@ fn add_distance_column_if_not_exists(conn: &Connection) -> Result<(), DbError> {
     Ok(())
 }
 
-
 /// Adds a new workout entry to the database.
 pub fn add_workout(
     conn: &Connection,
-    exercise_name: &str, // Should be the canonical name
+    exercise_name: &str,      // Should be the canonical name
     timestamp: DateTime<Utc>, // Feature 3: Accept specific timestamp
-    sets: Option<i64>, reps: Option<i64>, weight: Option<f64>,
-    duration: Option<i64>, distance: Option<f64>, notes: Option<String>,
+    sets: Option<i64>,
+    reps: Option<i64>,
+    weight: Option<f64>,
+    duration: Option<i64>,
+    distance: Option<f64>,
+    notes: Option<String>,
 ) -> Result<i64, DbError> {
     let timestamp_str = timestamp.to_rfc3339();
     // Use default value 1 for sets only if it's None and the exercise type needs it (e.g., resistance, bodyweight)
@@ -286,43 +356,84 @@ pub fn add_workout(
 /// Updates an existing workout entry in the database by its ID.
 pub fn update_workout(
     conn: &Connection,
-    id: i64, new_exercise_name: Option<&str>, new_sets: Option<i64>, new_reps: Option<i64>,
-    new_weight: Option<f64>, new_duration: Option<i64>, new_distance: Option<f64>, new_notes: Option<&str>,
+    id: i64,
+    new_exercise_name: Option<&str>,
+    new_sets: Option<i64>,
+    new_reps: Option<i64>,
+    new_weight: Option<f64>,
+    new_duration: Option<i64>,
+    new_distance: Option<f64>,
+    new_notes: Option<&str>,
     new_timestamp: Option<DateTime<Utc>>, // Feature 3: Allow editing timestamp
 ) -> Result<u64, DbError> {
     let mut params_map: HashMap<String, Box<dyn ToSql>> = HashMap::new();
     let mut updates = Vec::new();
 
-    if let Some(ex) = new_exercise_name { updates.push("exercise_name = :ex_name"); params_map.insert(":ex_name".into(), Box::new(ex.to_string())); }
-    if let Some(s) = new_sets { updates.push("sets = :sets"); params_map.insert(":sets".into(), Box::new(s)); }
-    if let Some(r) = new_reps { updates.push("reps = :reps"); params_map.insert(":reps".into(), Box::new(r)); }
+    if let Some(ex) = new_exercise_name {
+        updates.push("exercise_name = :ex_name");
+        params_map.insert(":ex_name".into(), Box::new(ex.to_string()));
+    }
+    if let Some(s) = new_sets {
+        updates.push("sets = :sets");
+        params_map.insert(":sets".into(), Box::new(s));
+    }
+    if let Some(r) = new_reps {
+        updates.push("reps = :reps");
+        params_map.insert(":reps".into(), Box::new(r));
+    }
     // Use is_some() to allow setting weight/duration/distance to NULL explicitly if needed, though CLI usually wouldn't do this.
-    if new_weight.is_some() { updates.push("weight = :weight"); params_map.insert(":weight".into(), Box::new(new_weight)); }
-    if new_duration.is_some() { updates.push("duration_minutes = :duration"); params_map.insert(":duration".into(), Box::new(new_duration)); }
-    if new_distance.is_some() { updates.push("distance = :distance"); params_map.insert(":distance".into(), Box::new(new_distance)); } // Add distance
-    if new_notes.is_some() { updates.push("notes = :notes"); params_map.insert(":notes".into(), Box::new(new_notes)); }
-    if let Some(ts) = new_timestamp { updates.push("timestamp = :ts"); params_map.insert(":ts".into(), Box::new(ts.to_rfc3339())); }
-
+    if new_weight.is_some() {
+        updates.push("weight = :weight");
+        params_map.insert(":weight".into(), Box::new(new_weight));
+    }
+    if new_duration.is_some() {
+        updates.push("duration_minutes = :duration");
+        params_map.insert(":duration".into(), Box::new(new_duration));
+    }
+    if new_distance.is_some() {
+        updates.push("distance = :distance");
+        params_map.insert(":distance".into(), Box::new(new_distance));
+    } // Add distance
+    if new_notes.is_some() {
+        updates.push("notes = :notes");
+        params_map.insert(":notes".into(), Box::new(new_notes));
+    }
+    if let Some(ts) = new_timestamp {
+        updates.push("timestamp = :ts");
+        params_map.insert(":ts".into(), Box::new(ts.to_rfc3339()));
+    }
 
     let sql = format!("UPDATE workouts SET {} WHERE id = :id", updates.join(", "));
     params_map.insert(":id".into(), Box::new(id));
 
     // Convert HashMap<String, Box<dyn ToSql>> to Vec<(&str, &dyn ToSql)> for execute_named
-    let params_for_exec: Vec<(&str, &dyn ToSql)> = params_map.iter()
+    let params_for_exec: Vec<(&str, &dyn ToSql)> = params_map
+        .iter()
         .map(|(k, v)| (k.as_str(), v.as_ref()))
         .collect();
 
-    let rows_affected = conn.execute(&sql, params_for_exec.as_slice())
-                        .map_err(DbError::UpdateFailed)?;
+    let rows_affected = conn
+        .execute(&sql, params_for_exec.as_slice())
+        .map_err(DbError::UpdateFailed)?;
 
-    if rows_affected == 0 { Err(DbError::WorkoutNotFound(id)) } else { Ok(rows_affected as u64) }
+    if rows_affected == 0 {
+        Err(DbError::WorkoutNotFound(id))
+    } else {
+        Ok(rows_affected as u64)
+    }
 }
 
 /// Deletes a workout entry from the database by its ID.
-pub fn delete_workout(conn: &Connection, id: i64) -> Result<u64, DbError> { // Return DbError
-    let rows_affected = conn.execute("DELETE FROM workouts WHERE id = ?", params![id])
+pub fn delete_workout(conn: &Connection, id: i64) -> Result<u64, DbError> {
+    // Return DbError
+    let rows_affected = conn
+        .execute("DELETE FROM workouts WHERE id = ?", params![id])
         .map_err(DbError::DeleteFailed)?;
-    if rows_affected == 0 { Err(DbError::WorkoutNotFound(id)) } else { Ok(rows_affected as u64) }
+    if rows_affected == 0 {
+        Err(DbError::WorkoutNotFound(id))
+    } else {
+        Ok(rows_affected as u64)
+    }
 }
 
 // Helper function to map a database row to a Workout struct
@@ -340,7 +451,9 @@ fn map_row_to_workout(row: &Row) -> Result<Workout, rusqlite::Error> {
 
     let timestamp = DateTime::parse_from_rfc3339(&timestamp_str)
         .map(|dt| dt.with_timezone(&Utc))
-        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(1, rusqlite::types::Type::Text, Box::new(e)))?;
+        .map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(1, rusqlite::types::Type::Text, Box::new(e))
+        })?;
 
     let exercise_type = match type_str_opt {
         Some(type_str) => match ExerciseType::try_from(type_str.as_str()) {
@@ -351,7 +464,16 @@ fn map_row_to_workout(row: &Row) -> Result<Workout, rusqlite::Error> {
     };
 
     Ok(Workout {
-        id, timestamp, exercise_name, sets, reps, weight, duration_minutes, distance, notes, exercise_type
+        id,
+        timestamp,
+        exercise_name,
+        sets,
+        reps,
+        weight,
+        duration_minutes,
+        distance,
+        notes,
+        exercise_type,
     })
 }
 
@@ -365,74 +487,122 @@ pub struct WorkoutFilters<'a> {
 }
 
 /// Lists workout entries from the database based on various filters.
-pub fn list_workouts_filtered(conn: &Connection, filters: WorkoutFilters) -> Result<Vec<Workout>, DbError> { // Return DbError
+pub fn list_workouts_filtered(
+    conn: &Connection,
+    filters: WorkoutFilters,
+) -> Result<Vec<Workout>, DbError> {
+    // Return DbError
     // Note: Column indices change due to adding `distance`
     let mut sql = "SELECT w.id, w.timestamp, w.exercise_name, w.sets, w.reps, w.weight, w.duration_minutes, w.distance, w.notes, e.type
                    FROM workouts w LEFT JOIN exercises e ON w.exercise_name = e.name WHERE 1=1".to_string();
     let mut params_map: HashMap<String, Box<dyn ToSql>> = HashMap::new();
 
-    if let Some(name) = filters.exercise_name { sql.push_str(" AND w.exercise_name = :ex_name COLLATE NOCASE"); params_map.insert(":ex_name".into(), Box::new(name.to_string())); }
-    if let Some(date) = filters.date { sql.push_str(" AND date(w.timestamp) = date(:date)"); params_map.insert(":date".into(), Box::new(date.format("%Y-%m-%d").to_string())); }
-    if let Some(ex_type) = filters.exercise_type { sql.push_str(" AND e.type = :ex_type"); params_map.insert(":ex_type".into(), Box::new(ex_type.to_string())); }
-    if let Some(m) = filters.muscle { sql.push_str(" AND e.muscles LIKE :muscle"); params_map.insert(":muscle".into(), Box::new(format!("%{}%", m))); }
+    if let Some(name) = filters.exercise_name {
+        sql.push_str(" AND w.exercise_name = :ex_name COLLATE NOCASE");
+        params_map.insert(":ex_name".into(), Box::new(name.to_string()));
+    }
+    if let Some(date) = filters.date {
+        sql.push_str(" AND date(w.timestamp) = date(:date)");
+        params_map.insert(
+            ":date".into(),
+            Box::new(date.format("%Y-%m-%d").to_string()),
+        );
+    }
+    if let Some(ex_type) = filters.exercise_type {
+        sql.push_str(" AND e.type = :ex_type");
+        params_map.insert(":ex_type".into(), Box::new(ex_type.to_string()));
+    }
+    if let Some(m) = filters.muscle {
+        sql.push_str(" AND e.muscles LIKE :muscle");
+        params_map.insert(":muscle".into(), Box::new(format!("%{}%", m)));
+    }
 
     // Order by timestamp: ASC if date filter is used (show earliest first for that day), DESC otherwise (show latest overall)
-    if filters.date.is_some() { sql.push_str(" ORDER BY w.timestamp ASC"); }
-    else { sql.push_str(" ORDER BY w.timestamp DESC"); }
+    if filters.date.is_some() {
+        sql.push_str(" ORDER BY w.timestamp ASC");
+    } else {
+        sql.push_str(" ORDER BY w.timestamp DESC");
+    }
 
     // Apply limit only if date is not specified (limit applies to overall latest, not within a date)
     if filters.date.is_none() {
-        if let Some(limit) = filters.limit { sql.push_str(" LIMIT :limit"); params_map.insert(":limit".into(), Box::new(limit)); }
+        if let Some(limit) = filters.limit {
+            sql.push_str(" LIMIT :limit");
+            params_map.insert(":limit".into(), Box::new(limit));
+        }
     }
 
     // Convert HashMap to slice for query_map_named
-    let params_for_query: Vec<(&str, &dyn ToSql)> = params_map.iter()
+    let params_for_query: Vec<(&str, &dyn ToSql)> = params_map
+        .iter()
         .map(|(k, v)| (k.as_str(), v.as_ref()))
         .collect();
 
     let mut stmt = conn.prepare(&sql).map_err(DbError::QueryFailed)?;
-    let workout_iter = stmt.query_map(params_for_query.as_slice(), map_row_to_workout)
-                       .map_err(DbError::QueryFailed)?;
+    let workout_iter = stmt
+        .query_map(params_for_query.as_slice(), map_row_to_workout)
+        .map_err(DbError::QueryFailed)?;
 
-    workout_iter.collect::<Result<Vec<_>, _>>().map_err(DbError::QueryFailed) // Collect results
+    workout_iter
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(DbError::QueryFailed) // Collect results
 }
 
- /// Lists workouts for a specific exercise (canonical name) performed on the Nth most recent day it was done.
- pub fn list_workouts_for_exercise_on_nth_last_day(
-     conn: &Connection, exercise_name: &str, // Canonical name expected
-     n: u32,
- ) -> Result<Vec<Workout>, DbError> { // Return DbError
-     if n == 0 { return Err(DbError::QueryFailed(rusqlite::Error::InvalidParameterCount(n as usize, 2))); } // Indicate bad N via error
-     let offset = n - 1;
-     // Note: Column indices change due to adding `distance`
-     let sql = "WITH RankedDays AS (SELECT DISTINCT date(timestamp) as workout_date FROM workouts WHERE exercise_name = :ex_name COLLATE NOCASE ORDER BY workout_date DESC LIMIT 1 OFFSET :offset)
+/// Lists workouts for a specific exercise (canonical name) performed on the Nth most recent day it was done.
+pub fn list_workouts_for_exercise_on_nth_last_day(
+    conn: &Connection,
+    exercise_name: &str, // Canonical name expected
+    n: u32,
+) -> Result<Vec<Workout>, DbError> {
+    // Return DbError
+    if n == 0 {
+        return Err(DbError::QueryFailed(
+            rusqlite::Error::InvalidParameterCount(n as usize, 2),
+        ));
+    } // Indicate bad N via error
+    let offset = n - 1;
+    // Note: Column indices change due to adding `distance`
+    let sql = "WITH RankedDays AS (SELECT DISTINCT date(timestamp) as workout_date FROM workouts WHERE exercise_name = :ex_name COLLATE NOCASE ORDER BY workout_date DESC LIMIT 1 OFFSET :offset)
                 SELECT w.id, w.timestamp, w.exercise_name, w.sets, w.reps, w.weight, w.duration_minutes, w.distance, w.notes, e.type
                 FROM workouts w LEFT JOIN exercises e ON w.exercise_name = e.name JOIN RankedDays rd ON date(w.timestamp) = rd.workout_date
                 WHERE w.exercise_name = :ex_name COLLATE NOCASE ORDER BY w.timestamp ASC;";
 
-     let mut stmt = conn.prepare(sql).map_err(DbError::QueryFailed)?;
-     let workout_iter = stmt.query_map(named_params! { ":ex_name": exercise_name, ":offset": offset }, map_row_to_workout)
-                            .map_err(DbError::QueryFailed)?;
+    let mut stmt = conn.prepare(sql).map_err(DbError::QueryFailed)?;
+    let workout_iter = stmt
+        .query_map(
+            named_params! { ":ex_name": exercise_name, ":offset": offset },
+            map_row_to_workout,
+        )
+        .map_err(DbError::QueryFailed)?;
 
-     workout_iter.collect::<Result<Vec<_>, _>>().map_err(DbError::QueryFailed)
- }
+    workout_iter
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(DbError::QueryFailed)
+}
 
 // ---- Exercise Definition Functions ----
 
 /// Creates a new exercise definition. Returns ID. Handles UNIQUE constraint.
 pub fn create_exercise(
-    conn: &Connection, name: &str, type_: &ExerciseType, muscles: Option<&str>,
-) -> Result<i64, DbError> { // Return DbError
+    conn: &Connection,
+    name: &str,
+    type_: &ExerciseType,
+    muscles: Option<&str>,
+) -> Result<i64, DbError> {
+    // Return DbError
     let type_str = type_.to_string();
-    match conn.execute("INSERT INTO exercises (name, type, muscles) VALUES (?1, ?2, ?3)", params![name, type_str, muscles]) {
+    match conn.execute(
+        "INSERT INTO exercises (name, type, muscles) VALUES (?1, ?2, ?3)",
+        params![name, type_str, muscles],
+    ) {
         Ok(_) => Ok(conn.last_insert_rowid()),
         Err(e) => {
             if let rusqlite::Error::SqliteFailure(ref err, _) = e {
-                 // Check for UNIQUE constraint violation specifically on 'exercises.name'
-                 if err.code == rusqlite::ErrorCode::ConstraintViolation {
+                // Check for UNIQUE constraint violation specifically on 'exercises.name'
+                if err.code == rusqlite::ErrorCode::ConstraintViolation {
                     // It's highly likely the name constraint. Return specific error.
-                     return Err(DbError::ExerciseNameNotUnique(name.to_string()));
-                 }
+                    return Err(DbError::ExerciseNameNotUnique(name.to_string()));
+                }
             }
             Err(DbError::InsertFailed(e)) // Wrap other errors
         }
@@ -442,9 +612,10 @@ pub fn create_exercise(
 /// Updates an existing exercise definition (found by ID or name). Requires mutable conn for transaction.
 /// Also handles updating associated aliases and workout entries if the name changes.
 pub fn update_exercise(
-    conn: &mut Connection, // Use mutable connection for transaction
+    conn: &mut Connection,          // Use mutable connection for transaction
     canonical_name_to_update: &str, // Use the resolved canonical name
-    new_name: Option<&str>, new_type: Option<&ExerciseType>,
+    new_name: Option<&str>,
+    new_type: Option<&ExerciseType>,
     new_muscles: Option<Option<&str>>,
 ) -> Result<u64, DbError> {
     // Find exercise by canonical name first to get ID and confirm existence
@@ -459,11 +630,22 @@ pub fn update_exercise(
     let mut params_map: HashMap<String, Box<dyn ToSql>> = HashMap::new();
     let mut updates = Vec::new();
 
-    if let Some(name) = new_name { updates.push("name = :name"); params_map.insert(":name".into(), Box::new(name.to_string())); }
-    if let Some(t) = new_type { updates.push("type = :type"); params_map.insert(":type".into(), Box::new(t.to_string())); }
-    if let Some(m_opt) = new_muscles { updates.push("muscles = :muscles"); params_map.insert(":muscles".into(), Box::new(m_opt)); }
+    if let Some(name) = new_name {
+        updates.push("name = :name");
+        params_map.insert(":name".into(), Box::new(name.to_string()));
+    }
+    if let Some(t) = new_type {
+        updates.push("type = :type");
+        params_map.insert(":type".into(), Box::new(t.to_string()));
+    }
+    if let Some(m_opt) = new_muscles {
+        updates.push("muscles = :muscles");
+        params_map.insert(":muscles".into(), Box::new(m_opt));
+    }
 
-    if updates.is_empty() { return Ok(0); } // No fields to update
+    if updates.is_empty() {
+        return Ok(0);
+    } // No fields to update
 
     // Use a transaction
     let tx = conn.transaction().map_err(DbError::Connection)?;
@@ -471,22 +653,24 @@ pub fn update_exercise(
     // 1. Update exercises table
     let sql_update_exercise = format!("UPDATE exercises SET {} WHERE id = :id", updates.join(", "));
     params_map.insert(":id".into(), Box::new(id));
-    let params_for_exec: Vec<(&str, &dyn ToSql)> = params_map.iter().map(|(k, v)| (k.as_str(), v.as_ref())).collect();
+    let params_for_exec: Vec<(&str, &dyn ToSql)> = params_map
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_ref()))
+        .collect();
 
     let rows_affected = match tx.execute(&sql_update_exercise, params_for_exec.as_slice()) {
         Ok(rows) => rows,
         Err(e) => {
-             if let rusqlite::Error::SqliteFailure(ref err, _) = e {
-                 // Check for UNIQUE constraint violation specifically on 'exercises.name'
-                 if err.code == rusqlite::ErrorCode::ConstraintViolation && name_being_changed {
+            if let rusqlite::Error::SqliteFailure(ref err, _) = e {
+                // Check for UNIQUE constraint violation specifically on 'exercises.name'
+                if err.code == rusqlite::ErrorCode::ConstraintViolation && name_being_changed {
                     // Name change failed due to unique constraint
-                     return Err(DbError::ExerciseNameNotUnique(target_new_name.to_string()));
-                 }
-             }
-             return Err(DbError::UpdateFailed(e)); // Other update error
+                    return Err(DbError::ExerciseNameNotUnique(target_new_name.to_string()));
+                }
+            }
+            return Err(DbError::UpdateFailed(e)); // Other update error
         }
     };
-
 
     // 2. Update related tables if name changed
     if name_being_changed {
@@ -511,10 +695,9 @@ pub fn update_exercise(
     }
 }
 
-
- /// Deletes an exercise definition (found by canonical name).
- /// Also deletes associated aliases.
- /// Note: Warning about associated workouts is now handled in the AppService layer.
+/// Deletes an exercise definition (found by canonical name).
+/// Also deletes associated aliases.
+/// Note: Warning about associated workouts is now handled in the AppService layer.
 pub fn delete_exercise(conn: &mut Connection, canonical_name: &str) -> Result<u64, DbError> {
     // Find exercise by canonical name first to get ID and confirm existence
     let exercise = get_exercise_by_name(conn, canonical_name)?
@@ -526,47 +709,70 @@ pub fn delete_exercise(conn: &mut Connection, canonical_name: &str) -> Result<u6
     let tx = conn.transaction().map_err(DbError::Connection)?;
 
     // 1. Delete associated aliases (Feature 1)
-    tx.execute("DELETE FROM aliases WHERE exercise_name = ? COLLATE NOCASE", params![name_to_delete]) // Ensure case-insensitive match
-       .map_err(DbError::DeleteFailed)?;
+    tx.execute(
+        "DELETE FROM aliases WHERE exercise_name = ? COLLATE NOCASE",
+        params![name_to_delete],
+    ) // Ensure case-insensitive match
+    .map_err(DbError::DeleteFailed)?;
 
     // 2. Delete the exercise definition
-    let rows_affected = tx.execute("DELETE FROM exercises WHERE id = ?", params![id])
-                          .map_err(DbError::DeleteFailed)?;
+    let rows_affected = tx
+        .execute("DELETE FROM exercises WHERE id = ?", params![id])
+        .map_err(DbError::DeleteFailed)?;
 
     tx.commit().map_err(DbError::Connection)?;
 
     if rows_affected == 0 {
-         // Should not happen if get_exercise_by_name succeeded
+        // Should not happen if get_exercise_by_name succeeded
         Err(DbError::ExerciseNotFound(name_to_delete))
+    } else {
+        Ok(rows_affected as u64)
     }
-    else { Ok(rows_affected as u64) }
 }
 
-
 fn map_row_to_exercise_definition(row: &Row) -> Result<ExerciseDefinition, rusqlite::Error> {
-     let id: i64 = row.get(0)?;
-     let name: String = row.get(1)?;
-     let type_str: String = row.get(2)?;
-     let muscles: Option<String> = row.get(3)?;
-     let ex_type = ExerciseType::try_from(type_str.as_str()).map_err(|e| {
-         rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::<dyn std::error::Error + Send + Sync>::from(e.to_string()))
-     })?;
-     Ok(ExerciseDefinition { id, name, type_: ex_type, muscles })
+    let id: i64 = row.get(0)?;
+    let name: String = row.get(1)?;
+    let type_str: String = row.get(2)?;
+    let muscles: Option<String> = row.get(3)?;
+    let ex_type = ExerciseType::try_from(type_str.as_str()).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(
+            2,
+            rusqlite::types::Type::Text,
+            Box::<dyn std::error::Error + Send + Sync>::from(e.to_string()),
+        )
+    })?;
+    Ok(ExerciseDefinition {
+        id,
+        name,
+        type_: ex_type,
+        muscles,
+    })
 }
 
 /// Retrieves an exercise definition by its name (case-insensitive).
-pub fn get_exercise_by_name(conn: &Connection, name: &str) -> Result<Option<ExerciseDefinition>, DbError> { // Return DbError
-    let mut stmt = conn.prepare("SELECT id, name, type, muscles FROM exercises WHERE name = ?1 COLLATE NOCASE")
-                      .map_err(DbError::QueryFailed)?;
+pub fn get_exercise_by_name(
+    conn: &Connection,
+    name: &str,
+) -> Result<Option<ExerciseDefinition>, DbError> {
+    // Return DbError
+    let mut stmt = conn
+        .prepare("SELECT id, name, type, muscles FROM exercises WHERE name = ?1 COLLATE NOCASE")
+        .map_err(DbError::QueryFailed)?;
     stmt.query_row(params![name], map_row_to_exercise_definition)
         .optional()
         .map_err(DbError::QueryFailed)
 }
 
 /// Retrieves an exercise definition by its ID.
-pub fn get_exercise_by_id(conn: &Connection, id: i64) -> Result<Option<ExerciseDefinition>, DbError> { // Return DbError
-    let mut stmt = conn.prepare("SELECT id, name, type, muscles FROM exercises WHERE id = ?1")
-                      .map_err(DbError::QueryFailed)?;
+pub fn get_exercise_by_id(
+    conn: &Connection,
+    id: i64,
+) -> Result<Option<ExerciseDefinition>, DbError> {
+    // Return DbError
+    let mut stmt = conn
+        .prepare("SELECT id, name, type, muscles FROM exercises WHERE id = ?1")
+        .map_err(DbError::QueryFailed)?;
     stmt.query_row(params![id], map_row_to_exercise_definition)
         .optional()
         .map_err(DbError::QueryFailed)
@@ -575,27 +781,35 @@ pub fn get_exercise_by_id(conn: &Connection, id: i64) -> Result<Option<ExerciseD
 // --- Alias Functions (Feature 1) ---
 
 /// Creates a new alias for a given canonical exercise name.
-pub fn create_alias(conn: &Connection, alias_name: &str, canonical_exercise_name: &str) -> Result<(), DbError> {
+pub fn create_alias(
+    conn: &Connection,
+    alias_name: &str,
+    canonical_exercise_name: &str,
+) -> Result<(), DbError> {
     match conn.execute(
         "INSERT INTO aliases (alias_name, exercise_name) VALUES (?1, ?2)",
         params![alias_name, canonical_exercise_name],
     ) {
         Ok(_) => Ok(()),
         Err(e) => {
-             if let rusqlite::Error::SqliteFailure(ref err, _) = e {
-                 // Check for UNIQUE constraint violation specifically on 'aliases.alias_name'
-                 if err.code == rusqlite::ErrorCode::ConstraintViolation {
-                     return Err(DbError::AliasAlreadyExists(alias_name.to_string()));
-                 }
-             }
-             Err(DbError::InsertFailed(e)) // Wrap other errors
+            if let rusqlite::Error::SqliteFailure(ref err, _) = e {
+                // Check for UNIQUE constraint violation specifically on 'aliases.alias_name'
+                if err.code == rusqlite::ErrorCode::ConstraintViolation {
+                    return Err(DbError::AliasAlreadyExists(alias_name.to_string()));
+                }
+            }
+            Err(DbError::InsertFailed(e)) // Wrap other errors
         }
     }
 }
 
 /// Deletes an alias by its name.
 pub fn delete_alias(conn: &Connection, alias_name: &str) -> Result<u64, DbError> {
-    let rows_affected = conn.execute("DELETE FROM aliases WHERE alias_name = ?1 COLLATE NOCASE", params![alias_name]) // Ensure case-insensitive match
+    let rows_affected = conn
+        .execute(
+            "DELETE FROM aliases WHERE alias_name = ?1 COLLATE NOCASE",
+            params![alias_name],
+        ) // Ensure case-insensitive match
         .map_err(DbError::DeleteFailed)?;
     if rows_affected == 0 {
         Err(DbError::AliasNotFound(alias_name.to_string()))
@@ -605,9 +819,13 @@ pub fn delete_alias(conn: &Connection, alias_name: &str) -> Result<u64, DbError>
 }
 
 /// Retrieves the canonical exercise name associated with an alias (case-insensitive).
-pub fn get_canonical_name_for_alias(conn: &Connection, alias_name: &str) -> Result<Option<String>, DbError> {
-    let mut stmt = conn.prepare("SELECT exercise_name FROM aliases WHERE alias_name = ?1 COLLATE NOCASE")
-                      .map_err(DbError::QueryFailed)?;
+pub fn get_canonical_name_for_alias(
+    conn: &Connection,
+    alias_name: &str,
+) -> Result<Option<String>, DbError> {
+    let mut stmt = conn
+        .prepare("SELECT exercise_name FROM aliases WHERE alias_name = ?1 COLLATE NOCASE")
+        .map_err(DbError::QueryFailed)?;
     stmt.query_row(params![alias_name], |row| row.get(0))
         .optional()
         .map_err(DbError::QueryFailed)
@@ -615,24 +833,33 @@ pub fn get_canonical_name_for_alias(conn: &Connection, alias_name: &str) -> Resu
 
 /// Lists all defined aliases and their corresponding canonical exercise names.
 pub fn list_aliases(conn: &Connection) -> Result<HashMap<String, String>, DbError> {
-    let mut stmt = conn.prepare("SELECT alias_name, exercise_name FROM aliases ORDER BY alias_name ASC")
-                      .map_err(DbError::QueryFailed)?;
-    let alias_iter = stmt.query_map([], |row| {
-        Ok((row.get(0)?, row.get(1)?))
-    }).map_err(DbError::QueryFailed)?;
+    let mut stmt = conn
+        .prepare("SELECT alias_name, exercise_name FROM aliases ORDER BY alias_name ASC")
+        .map_err(DbError::QueryFailed)?;
+    let alias_iter = stmt
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .map_err(DbError::QueryFailed)?;
 
-    alias_iter.collect::<Result<HashMap<_, _>, _>>().map_err(DbError::QueryFailed)
+    alias_iter
+        .collect::<Result<HashMap<_, _>, _>>()
+        .map_err(DbError::QueryFailed)
 }
-
 
 // --- Combined Identifier Resolution ---
 
 /// Retrieves an exercise definition by trying ID first, then alias, then name.
 /// Returns Option<(Definition, ResolvedByType)>.
 #[derive(Debug, PartialEq, Eq)]
-pub enum ResolvedByType { Id, Alias, Name }
+pub enum ResolvedByType {
+    Id,
+    Alias,
+    Name,
+}
 
-pub fn get_exercise_by_identifier(conn: &Connection, identifier: &str) -> Result<Option<(ExerciseDefinition, ResolvedByType)>, DbError> {
+pub fn get_exercise_by_identifier(
+    conn: &Connection,
+    identifier: &str,
+) -> Result<Option<(ExerciseDefinition, ResolvedByType)>, DbError> {
     // 1. Try parsing as ID
     if let Ok(id) = identifier.parse::<i64>() {
         if let Some(exercise) = get_exercise_by_id(conn, id)? {
@@ -651,8 +878,11 @@ pub fn get_exercise_by_identifier(conn: &Connection, identifier: &str) -> Result
             None => {
                 // Alias exists but points to a non-existent exercise (data inconsistency?)
                 // Log warning or handle as appropriate. For now, return as not found.
-                 eprintln!("Warning: Alias '{}' points to non-existent exercise '{}'.", identifier, canonical_name);
-                 return Ok(None);
+                eprintln!(
+                    "Warning: Alias '{}' points to non-existent exercise '{}'.",
+                    identifier, canonical_name
+                );
+                return Ok(None);
             }
         }
     }
@@ -666,29 +896,46 @@ pub fn get_exercise_by_identifier(conn: &Connection, identifier: &str) -> Result
 
 /// Lists defined exercises, optionally filtering by type and/or muscle.
 pub fn list_exercises(
-    conn: &Connection, type_filter: Option<ExerciseType>, muscle_filter: Option<&str>,
-) -> Result<Vec<ExerciseDefinition>, DbError> { // Return DbError
+    conn: &Connection,
+    type_filter: Option<ExerciseType>,
+    muscle_filter: Option<&str>,
+) -> Result<Vec<ExerciseDefinition>, DbError> {
+    // Return DbError
     let mut sql = "SELECT id, name, type, muscles FROM exercises WHERE 1=1".to_string();
     let mut params_map: HashMap<String, Box<dyn ToSql>> = HashMap::new();
 
-    if let Some(t) = type_filter { sql.push_str(" AND type = :type"); params_map.insert(":type".into(), Box::new(t.to_string())); }
-    if let Some(m) = muscle_filter { sql.push_str(" AND muscles LIKE :muscle"); params_map.insert(":muscle".into(), Box::new(format!("%{}%", m))); }
+    if let Some(t) = type_filter {
+        sql.push_str(" AND type = :type");
+        params_map.insert(":type".into(), Box::new(t.to_string()));
+    }
+    if let Some(m) = muscle_filter {
+        sql.push_str(" AND muscles LIKE :muscle");
+        params_map.insert(":muscle".into(), Box::new(format!("%{}%", m)));
+    }
     sql.push_str(" ORDER BY name ASC");
 
-    let params_for_query: Vec<(&str, &dyn ToSql)> = params_map.iter().map(|(k,v)| (k.as_str(), v.as_ref())).collect();
+    let params_for_query: Vec<(&str, &dyn ToSql)> = params_map
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_ref()))
+        .collect();
 
     let mut stmt = conn.prepare(&sql).map_err(DbError::QueryFailed)?;
-    let exercise_iter = stmt.query_map(params_for_query.as_slice(), map_row_to_exercise_definition)
-                            .map_err(DbError::QueryFailed)?;
+    let exercise_iter = stmt
+        .query_map(params_for_query.as_slice(), map_row_to_exercise_definition)
+        .map_err(DbError::QueryFailed)?;
 
-    exercise_iter.collect::<Result<Vec<_>, _>>().map_err(DbError::QueryFailed) // Collect results
+    exercise_iter
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(DbError::QueryFailed) // Collect results
 }
-
 
 // --- Personal Best Query Functions (Feature 4) ---
 
 /// Gets the maximum weight lifted for a specific exercise (canonical name).
-pub fn get_max_weight_for_exercise(conn: &Connection, canonical_exercise_name: &str) -> Result<Option<f64>, DbError> {
+pub fn get_max_weight_for_exercise(
+    conn: &Connection,
+    canonical_exercise_name: &str,
+) -> Result<Option<f64>, DbError> {
     conn.query_row(
         "SELECT MAX(weight) FROM workouts WHERE exercise_name = ?1 COLLATE NOCASE AND weight IS NOT NULL", // Add COLLATE NOCASE
         params![canonical_exercise_name],
@@ -701,8 +948,11 @@ pub fn get_max_weight_for_exercise(conn: &Connection, canonical_exercise_name: &
 }
 
 /// Gets the maximum reps performed in a single set for a specific exercise (canonical name).
-pub fn get_max_reps_for_exercise(conn: &Connection, canonical_exercise_name: &str) -> Result<Option<i64>, DbError> {
-     conn.query_row(
+pub fn get_max_reps_for_exercise(
+    conn: &Connection,
+    canonical_exercise_name: &str,
+) -> Result<Option<i64>, DbError> {
+    conn.query_row(
         // Note: This assumes reps are per set. If reps column means total reps for the entry, the interpretation changes.
         // Assuming reps is 'reps per set'.
         "SELECT MAX(reps) FROM workouts WHERE exercise_name = ?1 COLLATE NOCASE AND reps IS NOT NULL", // Add COLLATE NOCASE
@@ -716,8 +966,11 @@ pub fn get_max_reps_for_exercise(conn: &Connection, canonical_exercise_name: &st
 }
 
 /// Gets the maximum duration in minutes for a specific exercise (canonical name).
-pub fn get_max_duration_for_exercise(conn: &Connection, canonical_exercise_name: &str) -> Result<Option<i64>, DbError> {
-     conn.query_row(
+pub fn get_max_duration_for_exercise(
+    conn: &Connection,
+    canonical_exercise_name: &str,
+) -> Result<Option<i64>, DbError> {
+    conn.query_row(
         "SELECT MAX(duration_minutes) FROM workouts WHERE exercise_name = ?1 COLLATE NOCASE AND duration_minutes IS NOT NULL", // Add COLLATE NOCASE
         params![canonical_exercise_name],
         |row| row.get(0),
@@ -728,8 +981,11 @@ pub fn get_max_duration_for_exercise(conn: &Connection, canonical_exercise_name:
 }
 
 /// Gets the maximum distance for a specific exercise (canonical name). Assumes distance stored in km.
-pub fn get_max_distance_for_exercise(conn: &Connection, canonical_exercise_name: &str) -> Result<Option<f64>, DbError> {
-     conn.query_row(
+pub fn get_max_distance_for_exercise(
+    conn: &Connection,
+    canonical_exercise_name: &str,
+) -> Result<Option<f64>, DbError> {
+    conn.query_row(
         "SELECT MAX(distance) FROM workouts WHERE exercise_name = ?1 COLLATE NOCASE AND distance IS NOT NULL", // Add COLLATE NOCASE
         params![canonical_exercise_name],
         |row| row.get(0),
@@ -738,7 +994,6 @@ pub fn get_max_distance_for_exercise(conn: &Connection, canonical_exercise_name:
     .map_err(DbError::QueryFailed)
     .map(|opt_opt| opt_opt.flatten())
 }
-
 
 // --- Statistics Query Functions ---
 
@@ -763,5 +1018,74 @@ pub fn get_workout_timestamps_for_exercise(
             })
     })?;
 
-    timestamp_iter.collect::<Result<Vec<_>, _>>().map_err(DbError::QueryFailed)
+    timestamp_iter
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(DbError::QueryFailed)
+}
+
+// --- Bodyweight Functions ---
+
+/// Adds a new bodyweight entry.
+pub fn add_bodyweight(
+    conn: &Connection,
+    timestamp: DateTime<Utc>,
+    weight: f64,
+) -> Result<i64, DbError> {
+    let timestamp_str = timestamp.to_rfc3339();
+    conn.execute(
+        "INSERT INTO bodyweights (timestamp, weight) VALUES (?1, ?2)",
+        params![timestamp_str, weight],
+    )
+    .map_err(|e| {
+        // Handle potential UNIQUE constraint violation on timestamp nicely
+        if let rusqlite::Error::SqliteFailure(ref err, _) = e {
+            if err.code == rusqlite::ErrorCode::ConstraintViolation {
+                return DbError::InsertFailed(rusqlite::Error::SqliteFailure(
+                    err.clone(),
+                    Some(format!(
+                        "A bodyweight entry already exists for timestamp '{}'.",
+                        timestamp_str
+                    )),
+                ));
+            }
+        }
+        DbError::InsertFailed(e)
+    })?;
+    Ok(conn.last_insert_rowid())
+}
+
+/// Retrieves the most recent bodyweight entry.
+pub fn get_latest_bodyweight(conn: &Connection) -> Result<Option<f64>, DbError> {
+    conn.query_row(
+        "SELECT weight FROM bodyweights ORDER BY timestamp DESC LIMIT 1",
+        [],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(DbError::QueryFailed)
+}
+
+/// Retrieves all bodyweight entries, ordered by timestamp descending.
+pub fn list_bodyweights(
+    conn: &Connection,
+    limit: u32,
+) -> Result<Vec<(DateTime<Utc>, f64)>, DbError> {
+    let mut stmt =
+        conn.prepare("SELECT timestamp, weight FROM bodyweights ORDER BY timestamp DESC LIMIT ?1")?;
+    let iter = stmt.query_map(params![limit], |row| {
+        let timestamp_str: String = row.get(0)?;
+        let weight: f64 = row.get(1)?;
+        let timestamp = DateTime::parse_from_rfc3339(&timestamp_str)
+            .map(|dt| dt.with_timezone(&Utc))
+            .map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    0,
+                    rusqlite::types::Type::Text,
+                    Box::new(e),
+                )
+            })?;
+        Ok((timestamp, weight))
+    })?;
+    iter.collect::<Result<Vec<_>, _>>()
+        .map_err(DbError::QueryFailed)
 }

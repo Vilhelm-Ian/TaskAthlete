@@ -1,30 +1,7 @@
-[package]
-name = "task-athlete"
-version = "0.1.0"
-edition = "2021"
-about = "A CLI tool to track workouts"
+[workspace]
+members = [
+    "task-athlete-lib",
+    "task-athlete-cli",
+]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[dependencies]
-anyhow = "1.0"
-chrono = { version = "0.4", features = ["serde"] }
-clap = { version = "4.4", features = ["derive"] }
-clap_complete = "4.4"
-comfy-table = "7.0" # Or latest version
-dirs = "5.0"
-rusqlite = { version = "0.30", features = ["chrono", "bundled"] } # bundled is often easier
-serde = { version = "1.0", features = ["derive"] }
-thiserror = "1.0"
-toml = "0.8"
-strum = "0.25"
-strum_macros = "0.25"
-csv = "1.3.1"
-
-[lib]
-name = "task_athlete_lib"
-path = "src/lib.rs"
-
-[[bin]]
-name = "task-athlete" # Name of the executable
-path = "src/main.rs"
+resolver = "2" # Recommended for workspaces

@@ -10,12 +10,14 @@ use ratatui::{
     Terminal,
 };
 use std::{io, time::Duration};
-use task_athlete_lib::AppService; // Use AppService from the lib
+use task_athlete_lib::AppService;
 
-mod app; // Application state
-mod ui; // UI rendering logic
+// Declare modules
+mod app;
+mod ui;
 
-use crate::app::App;
+// Use items from modules
+use crate::app::App; // Get App struct from app module
 
 fn main() -> Result<()> {
     // Initialize the library service
@@ -50,23 +52,26 @@ fn main() -> Result<()> {
 
 fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> {
     loop {
-        // Ensure data is fresh before drawing
-        app.refresh_data_for_active_tab();
+        // Ensure data is fresh before drawing (moved inside loop)
+        app.refresh_data_for_active_tab(); // Refresh data *before* drawing
 
         terminal.draw(|f| ui::render_ui(f, app))?;
 
         // Poll for events with a timeout (e.g., 250ms)
-        // This allows the app to potentially update state even without input
         if event::poll(Duration::from_millis(250))? {
             if let Event::Key(key) = event::read()? {
                 // Only process key press events
                 if key.kind == KeyEventKind::Press {
                     // Pass key event to the app's input handler
+                    // handle_key_event is now a method on App
                     app.handle_key_event(key)?;
                 }
             }
+            // TODO: Handle other events like resize if needed
+            // if let Event::Resize(width, height) = event::read()? {
+            //     // Handle resize
+            // }
         }
-        // Handle other events like resize if needed
 
         if app.should_quit {
             return Ok(());

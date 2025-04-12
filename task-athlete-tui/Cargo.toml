@@ -14,6 +14,6 @@ ratatui = { version = "0.26.3", features = ["crossterm", "serde"] }
 crossterm = "0.27.0"
 anyhow = "1.0.86"
 chrono = "0.4.38"
-# Add other dependencies as needed, e.g., for input parsing, fuzzy finding
-# tui-input = "0.8.0" # Example for text input handling
+thiserror = "2.0.12"
+tui-input = "0.8.0" # Example for text input handling
 # rustyline = "14.0.0" # Example for input prompts

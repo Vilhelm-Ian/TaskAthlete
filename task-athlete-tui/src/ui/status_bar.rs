@@ -18,6 +18,7 @@ pub fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
          ActiveModal::Help => " [Esc/Enter/?] Close Help ".to_string(),
          ActiveModal::LogBodyweight { .. } => " [Esc] Cancel | [Enter] Confirm | [Tab/↑↓] Navigate ".to_string(),
          ActiveModal::SetTargetWeight { .. } => " [Esc] Cancel | [Enter] Confirm | [Tab/↑↓] Navigate ".to_string(),
+         ActiveModal::AddWorkout { .. } => " [Esc] Cancel | [Enter] Confirm/Next | [Tab/↑↓] Navigate | [↑↓ Arrow] Inc/Dec Number ".to_string(),
      };
 
     let error_text = app.last_error.as_deref().unwrap_or("");
@@ -27,8 +28,8 @@ pub fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
         .constraints([Constraint::Percentage(80), Constraint::Percentage(20)])
         .split(area);
 
-    let status_paragraph = Paragraph::new(status_text)
-        .style(Style::default().bg(Color::DarkGray).fg(Color::White));
+    let status_paragraph =
+        Paragraph::new(status_text).style(Style::default().bg(Color::DarkGray).fg(Color::White));
     f.render_widget(status_paragraph, status_chunks[0]);
 
     let error_paragraph = Paragraph::new(error_text)

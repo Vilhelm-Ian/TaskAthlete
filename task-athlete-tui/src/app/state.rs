@@ -3,7 +3,7 @@ use crate::app::AppInputError; // Use error from parent mod
 use chrono::Utc;
 use ratatui::widgets::{ListState, TableState};
 use std::time::Instant;
-use task_athlete_lib::{AppService, Workout}; // Keep lib imports
+use task_athlete_lib::{AppService, ExerciseDefinition, Workout, WorkoutFilters}; // Keep lib imports
 
 // Represents the active UI tab
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -46,6 +46,19 @@ pub enum SetTargetWeightField {
     Cancel,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AddWorkoutField {
+    Exercise, // Text input for exercise name/alias
+    Sets,
+    Reps,
+    Weight,
+    Duration,
+    Distance,
+    Notes,
+    Confirm,
+    Cancel,
+}
+
 // Represents the state of active modals
 #[derive(Clone, Debug, PartialEq)]
 pub enum ActiveModal {
@@ -61,6 +74,19 @@ pub enum ActiveModal {
         weight_input: String,
         focused_field: SetTargetWeightField,
         error_message: Option<String>,
+    },
+    AddWorkout {
+        exercise_input: String, // Name or Alias
+        sets_input: String,
+        reps_input: String,
+        weight_input: String, // Added weight for bodyweight, direct for others
+        duration_input: String,
+        distance_input: String,
+        notes_input: String,
+        focused_field: AddWorkoutField,
+        error_message: Option<String>,
+        // Store the resolved definition temporarily after user leaves exercise field
+        resolved_exercise: Option<ExerciseDefinition>,
     },
     // Add more here
 }
@@ -148,6 +174,18 @@ impl App {
                 self.last_error = None;
                 self.error_clear_time = None;
             }
+        }
+    }
+    pub fn get_last_workout_for_exercise(&self, canonical_name: &str) -> Option<Workout> {
+        let filters = WorkoutFilters {
+            exercise_name: Some(canonical_name),
+            limit: Some(1), // Get only the most recent one
+            ..Default::default()
+        };
+        // Ignore errors here, just return None if fetch fails
+        match self.service.list_workouts(filters) {
+            Ok(workouts) if !workouts.is_empty() => workouts.into_iter().next(),
+            _ => None,
         }
     }
 }

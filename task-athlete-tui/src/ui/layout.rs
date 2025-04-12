@@ -1,7 +1,8 @@
 // task-athlete-tui/src/ui/layout.rs
 use crate::{
     app::{ActiveTab, App}, // Use App from crate::app
-    ui::{ // Use sibling UI modules
+    ui::{
+        // Use sibling UI modules
         bodyweight_tab::render_bodyweight_tab,
         log_tab::render_log_tab,
         modals::render_modal,
@@ -43,7 +44,10 @@ pub fn render_ui(f: &mut Frame, app: &mut App) {
 fn render_main_content(f: &mut Frame, app: &mut App, area: Rect) {
     let content_block = ratatui::widgets::Block::default().borders(ratatui::widgets::Borders::NONE);
     f.render_widget(content_block, area);
-    let content_area = area.inner(&ratatui::layout::Margin { vertical: 0, horizontal: 0 });
+    let content_area = area.inner(&ratatui::layout::Margin {
+        vertical: 0,
+        horizontal: 0,
+    });
 
     match app.active_tab {
         ActiveTab::Log => render_log_tab(f, app, content_area),
@@ -51,6 +55,34 @@ fn render_main_content(f: &mut Frame, app: &mut App, area: Rect) {
         ActiveTab::Graphs => render_placeholder(f, "Graphs Tab", content_area),
         ActiveTab::Bodyweight => render_bodyweight_tab(f, app, content_area),
     }
+}
+
+/// Helper function to create a centered rectangle with fixed dimensions.
+/// Ensures the dimensions do not exceed the available screen size `r`.
+pub fn centered_rect_fixed(width: u16, height: u16, r: Rect) -> Rect {
+    // Clamp dimensions to the screen size
+    let clamped_width = width.min(r.width);
+    let clamped_height = height.min(r.height);
+
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            // Calculate margins to center the fixed height
+            Constraint::Length(r.height.saturating_sub(clamped_height) / 2),
+            Constraint::Length(clamped_height), // Use the clamped fixed height
+            Constraint::Length(r.height.saturating_sub(clamped_height) / 2),
+        ])
+        .split(r);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            // Calculate margins to center the fixed width
+            Constraint::Length(r.width.saturating_sub(clamped_width) / 2),
+            Constraint::Length(clamped_width), // Use the clamped fixed width
+            Constraint::Length(r.width.saturating_sub(clamped_width) / 2),
+        ])
+        .split(popup_layout[1])[1] // Take the middle chunk
 }
 
 /// Helper function to create a centered rectangle for modals

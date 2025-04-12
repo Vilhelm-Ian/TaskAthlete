@@ -1,13 +1,20 @@
 // task-athlete-tui/src/app/actions.rs
-use super::modals::{handle_log_bodyweight_modal_input, handle_set_target_weight_modal_input}; // Use specific modal handlers
+use super::data::log_change_date;
+use super::modals::{
+    handle_add_workout_modal_input, handle_log_bodyweight_modal_input,
+    handle_set_target_weight_modal_input,
+}; // Use specific modal handlers
 use super::navigation::{
     bw_table_next, bw_table_previous, log_list_next, log_list_previous, log_table_next,
     log_table_previous,
 };
-use super::state::{ActiveModal, ActiveTab, App, BodyweightFocus, LogBodyweightField, LogFocus, SetTargetWeightField};
-use super::data::log_change_date;
+use super::state::{
+    ActiveModal, ActiveTab, AddWorkoutField, App, BodyweightFocus, LogBodyweightField, LogFocus,
+    SetTargetWeightField,
+};
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent};
+use task_athlete_lib::{ExerciseType, Units};
 
 // Make handle_key_event a method on App
 impl App {
@@ -52,6 +59,7 @@ impl App {
             }
             ActiveModal::LogBodyweight { .. } => handle_log_bodyweight_modal_input(self, key)?, // Pass self
             ActiveModal::SetTargetWeight { .. } => handle_set_target_weight_modal_input(self, key)?, // Pass self
+            ActiveModal::AddWorkout { .. } => handle_add_workout_modal_input(self, key)?,
             _ => {
                 if key.code == KeyCode::Esc {
                     self.active_modal = ActiveModal::None;
@@ -67,7 +75,7 @@ impl App {
                 KeyCode::Char('k') | KeyCode::Up => log_list_previous(self),
                 KeyCode::Char('j') | KeyCode::Down => log_list_next(self),
                 KeyCode::Tab => self.log_focus = LogFocus::SetList,
-                KeyCode::Char('a') => { /* TODO */ }
+                KeyCode::Char('a') => self.open_add_workout_modal()?,
                 KeyCode::Char('g') => { /* TODO */ }
                 KeyCode::Char('h') | KeyCode::Left => log_change_date(self, -1),
                 KeyCode::Char('l') | KeyCode::Right => log_change_date(self, 1),
@@ -134,6 +142,86 @@ impl App {
                 },
             },
         }
+        Ok(())
+    }
+
+    fn open_add_workout_modal(&mut self) -> Result<()> {
+        let mut initial_exercise_input = String::new();
+        let mut initial_sets = "1".to_string(); // Default to 1
+        let mut initial_reps = String::new();
+        let mut initial_weight = String::new();
+        let mut initial_duration = String::new();
+        let mut initial_distance = String::new();
+        let initial_notes = String::new();
+        let mut resolved_exercise = None; // Track resolved exercise type
+
+        // Try to pre-fill from selected exercise's last entry
+        if let Some(selected_index) = self.log_exercise_list_state.selected() {
+            if let Some(selected_exercise_name) = self.log_exercises_today.get(selected_index) {
+                initial_exercise_input = selected_exercise_name.clone();
+                // Resolve to get canonical name and type for fetching last workout
+                match self
+                    .service
+                    .resolve_exercise_identifier(selected_exercise_name)
+                {
+                    Ok(Some(def)) => {
+                        resolved_exercise = Some(def.clone()); // Store definition for later use
+                        if let Some(last_workout) = self.get_last_workout_for_exercise(&def.name) {
+                            initial_sets =
+                                last_workout.sets.map_or("1".to_string(), |v| v.to_string());
+                            initial_reps =
+                                last_workout.reps.map_or(String::new(), |v| v.to_string());
+                            initial_duration = last_workout
+                                .duration_minutes
+                                .map_or(String::new(), |v| v.to_string());
+
+                            // Pre-fill weight (adjusting for bodyweight)
+                            if def.type_ == ExerciseType::BodyWeight {
+                                // Show only *added* weight
+                                let bodyweight_used = self.service.config.bodyweight.unwrap_or(0.0); // Assume 0 if not set
+                                let added_weight = last_workout
+                                    .weight
+                                    .map_or(0.0, |w| w - bodyweight_used)
+                                    .max(0.0);
+                                if added_weight > 0.0 {
+                                    initial_weight = format!("{:.1}", added_weight);
+                                }
+                            } else {
+                                initial_weight = last_workout
+                                    .weight
+                                    .map_or(String::new(), |v| format!("{:.1}", v));
+                            }
+
+                            // Pre-fill distance (converting km back to user units)
+                            if let Some(dist_km) = last_workout.distance {
+                                let display_dist = match self.service.config.units {
+                                    Units::Metric => dist_km,
+                                    Units::Imperial => dist_km * 0.621371,
+                                };
+                                initial_distance = format!("{:.1}", display_dist);
+                            }
+                        }
+                    }
+                    Ok(None) => { /* Exercise name exists in today's log but not definition? Unlikely but possible */
+                    }
+                    Err(e) => {
+                        self.set_error(format!("Error resolving exercise: {}", e));
+                    }
+                }
+            }
+        }
+        self.active_modal = ActiveModal::AddWorkout {
+            exercise_input: initial_exercise_input,
+            sets_input: initial_sets,
+            reps_input: initial_reps,
+            weight_input: initial_weight,
+            duration_input: initial_duration,
+            distance_input: initial_distance,
+            notes_input: initial_notes,
+            focused_field: AddWorkoutField::Exercise, // Start focus on exercise
+            error_message: None,
+            resolved_exercise, // Store the potentially resolved definition
+        };
         Ok(())
     }
 

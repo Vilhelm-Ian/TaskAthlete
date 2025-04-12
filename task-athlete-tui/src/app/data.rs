@@ -18,7 +18,8 @@ impl App {
     }
 
     // --- Log Tab Data ---
-    pub(crate) fn refresh_log_data(&mut self) { // Make crate-public if needed by other app modules
+    pub(crate) fn refresh_log_data(&mut self) {
+        // Make crate-public if needed by other app modules
         let filters = WorkoutFilters {
             date: Some(self.log_viewed_date),
             ..Default::default()
@@ -60,12 +61,17 @@ impl App {
     }
 
     // Make crate-public
-    pub(crate) fn update_log_sets_for_selected_exercise(&mut self, all_workouts_for_date: &[Workout]) {
+    pub(crate) fn update_log_sets_for_selected_exercise(
+        &mut self,
+        all_workouts_for_date: &[Workout],
+    ) {
         if let Some(selected_index) = self.log_exercise_list_state.selected() {
-            if let Some(selected_exercise_name) = self.log_exercises_today.get(selected_index) {
+            if let Some(selected_exercise_name) =
+                self.log_exercises_today.get(selected_index).cloned()
+            {
                 self.log_sets_for_selected_exercise = all_workouts_for_date
                     .iter()
-                    .filter(|w| &w.exercise_name == selected_exercise_name)
+                    .filter(|w| w.exercise_name == selected_exercise_name)
                     .cloned()
                     .collect();
 
@@ -95,7 +101,7 @@ impl App {
     }
 
     // --- Bodyweight Tab Data ---
-     pub(crate) fn refresh_bodyweight_data(&mut self) {
+    pub(crate) fn refresh_bodyweight_data(&mut self) {
         match self.service.list_bodyweights(1000) {
             Ok(entries) => {
                 self.bw_history = entries;
@@ -111,7 +117,7 @@ impl App {
                     self.bw_history_state.select(Some(0));
                 }
 
-                self.bw_latest = self.bw_history.first().map(|(_, _, w)| *w);
+                self.bw_latest = self.bw_history.first().map(|(_, w)| *w);
                 self.bw_target = self.service.get_target_bodyweight(); // Refresh target
 
                 self.update_bw_graph_data();
@@ -145,11 +151,16 @@ impl App {
             NaiveDate::from_ymd_opt(year, month, day.min(last_day_of_target_month.day()))
                 .unwrap_or(last_day_of_target_month)
         } else {
-            self.bw_history.last().map(|(_, d, _)| *d).unwrap_or(now_naive)
+            self.bw_history
+                .last()
+                .map(|(ts, _)| ts.date_naive())
+                .unwrap_or(now_naive)
         };
 
-        let filtered_data: Vec<_> = self.bw_history.iter()
-            .filter(|(_, date, _)| *date >= start_date_filter)
+        let filtered_data: Vec<_> = self
+            .bw_history
+            .iter()
+            .filter(|(ts, _)| ts.date_naive() >= start_date_filter)
             .rev()
             .collect();
 
@@ -157,21 +168,38 @@ impl App {
             self.bw_graph_data.clear();
             return;
         }
-
-        let first_day_epoch = filtered_data.first().unwrap().1.num_days_from_ce();
-        self.bw_graph_data = filtered_data.iter()
-            .map(|(_, date, weight)| {
+        let first_day_epoch = filtered_data
+            .first()
+            .unwrap()
+            .0
+            .date_naive()
+            .num_days_from_ce();
+        self.bw_graph_data = filtered_data
+            .iter()
+            .map(|(date, weight)| {
                 let days_since_first = (date.num_days_from_ce() - first_day_epoch) as f64;
                 (days_since_first, *weight)
             })
             .collect();
 
         let first_ts = self.bw_graph_data.first().map(|(x, _)| *x).unwrap_or(0.0);
-        let last_ts = self.bw_graph_data.last().map(|(x, _)| *x).unwrap_or(first_ts + 1.0);
+        let last_ts = self
+            .bw_graph_data
+            .last()
+            .map(|(x, _)| *x)
+            .unwrap_or(first_ts + 1.0);
         self.bw_graph_x_bounds = [first_ts, last_ts];
 
-        let min_weight = self.bw_graph_data.iter().map(|(_, y)| *y).fold(f64::INFINITY, f64::min);
-        let max_weight = self.bw_graph_data.iter().map(|(_, y)| *y).fold(f64::NEG_INFINITY, f64::max);
+        let min_weight = self
+            .bw_graph_data
+            .iter()
+            .map(|(_, y)| *y)
+            .fold(f64::INFINITY, f64::min);
+        let max_weight = self
+            .bw_graph_data
+            .iter()
+            .map(|(_, y)| *y)
+            .fold(f64::NEG_INFINITY, f64::max);
         let y_min = self.bw_target.map_or(min_weight, |t| t.min(min_weight));
         let y_max = self.bw_target.map_or(max_weight, |t| t.max(max_weight));
         let y_padding = ((y_max - y_min) * 0.1).max(1.0);
@@ -179,14 +207,23 @@ impl App {
     }
 }
 
-
 // Function needs to be associated with App or take &mut App
 // Move it outside the impl block but keep it in this file, taking &mut App
 pub fn log_change_date(app: &mut App, days: i64) {
-     if let Some(new_date) = app.log_viewed_date.checked_add_signed(Duration::days(days)) {
-         app.log_viewed_date = new_date;
-         app.log_exercise_list_state.select(if app.log_exercises_today.is_empty() { None } else { Some(0) });
-         app.log_set_table_state.select(if app.log_sets_for_selected_exercise.is_empty() { None } else { Some(0) });
-         // Data will be refreshed by the main loop
-     }
- }
+    if let Some(new_date) = app.log_viewed_date.checked_add_signed(Duration::days(days)) {
+        app.log_viewed_date = new_date;
+        app.log_exercise_list_state
+            .select(if app.log_exercises_today.is_empty() {
+                None
+            } else {
+                Some(0)
+            });
+        app.log_set_table_state
+            .select(if app.log_sets_for_selected_exercise.is_empty() {
+                None
+            } else {
+                Some(0)
+            });
+        // Data will be refreshed by the main loop
+    }
+}

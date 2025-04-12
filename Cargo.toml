@@ -2,6 +2,7 @@
 members = [
     "task-athlete-lib",
     "task-athlete-cli",
+    "task-athlete-tui",
 ]
 
 resolver = "2" # Recommended for workspaces

@@ -143,7 +143,7 @@ pub fn calculate_daily_volume_filtered(
         .map_err(DbError::QueryFailed)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Workout {
     pub id: i64,
     pub timestamp: DateTime<Utc>,
@@ -174,6 +174,8 @@ pub enum DbError {
     DataDir,
     #[error("I/O error accessing database file")]
     Io(#[from] std::io::Error),
+    #[error("Bodyweight entry already exists for this timestamp: {0}")]
+    BodyweightEntryExists(String),
     #[error("Exercise not found: {0}")]
     ExerciseNotFound(String),
     #[error("Workout entry not found: ID {0}")]
@@ -1039,14 +1041,9 @@ pub fn add_bodyweight(
     .map_err(|e| {
         // Handle potential UNIQUE constraint violation on timestamp nicely
         if let rusqlite::Error::SqliteFailure(ref err, _) = e {
-            if err.code == rusqlite::ErrorCode::ConstraintViolation {
-                return DbError::InsertFailed(rusqlite::Error::SqliteFailure(
-                    err.clone(),
-                    Some(format!(
-                        "A bodyweight entry already exists for timestamp '{}'.",
-                        timestamp_str
-                    )),
-                ));
+            if err.code == rusqlite::ErrorCode::ConstraintViolation && err.extended_code == 2067 {
+                // SQLITE_CONSTRAINT_UNIQUE (extended)
+                return DbError::BodyweightEntryExists(timestamp_str);
             }
         }
         DbError::InsertFailed(e)

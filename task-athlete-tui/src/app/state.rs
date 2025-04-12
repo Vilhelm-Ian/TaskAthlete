@@ -1,5 +1,6 @@
 // task-athlete-tui/src/app/state.rs
 use crate::app::AppInputError; // Use error from parent mod
+use chrono::Utc;
 use ratatui::widgets::{ListState, TableState};
 use std::time::Instant;
 use task_athlete_lib::{AppService, Workout}; // Keep lib imports
@@ -89,7 +90,7 @@ pub struct App {
 
     // === Bodyweight Tab State ===
     pub bw_focus: BodyweightFocus,
-    pub bw_history: Vec<(i64, chrono::NaiveDate, f64)>,
+    pub bw_history: Vec<(chrono::DateTime<Utc>, f64)>,
     pub bw_history_state: TableState,
     pub bw_target: Option<f64>,
     pub bw_latest: Option<f64>,

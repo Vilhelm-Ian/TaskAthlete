@@ -1,5 +1,5 @@
 // task-athlete-tui/src/ui/status_bar.rs
-use crate::app::{state::ActiveModal, App}; // Use App from crate::app
+use crate::app::{state::ActiveModal, AddWorkoutField, App}; // Use App from crate::app
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
@@ -8,7 +8,7 @@ use ratatui::{
 };
 
 pub fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
-    let status_text = match app.active_modal {
+    let status_text = match &app.active_modal {
          ActiveModal::None => match app.active_tab {
              crate::app::ActiveTab::Log => "[Tab] Focus | [↑↓/jk] Nav | [←→/hl] Date | [a]dd | [l]og set | [e]dit | [d]elete | [g]raphs | [?] Help | [Q]uit ",
              crate::app::ActiveTab::History => "[↑↓/jk] Nav | [/f] Filter | [e]dit | [d]elete | [?] Help | [Q]uit ",
@@ -18,7 +18,18 @@ pub fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
          ActiveModal::Help => " [Esc/Enter/?] Close Help ".to_string(),
          ActiveModal::LogBodyweight { .. } => " [Esc] Cancel | [Enter] Confirm | [Tab/↑↓] Navigate ".to_string(),
          ActiveModal::SetTargetWeight { .. } => " [Esc] Cancel | [Enter] Confirm | [Tab/↑↓] Navigate ".to_string(),
-         ActiveModal::AddWorkout { .. } => " [Esc] Cancel | [Enter] Confirm/Next | [Tab/↑↓] Navigate | [↑↓ Arrow] Inc/Dec Number ".to_string(),
+         ActiveModal::AddWorkout { focused_field, exercise_suggestions, .. } => { // Destructure focused_field
+             match focused_field {
+                 AddWorkoutField::Exercise if !exercise_suggestions.is_empty() =>
+                     "Type name | [↓] Suggestions | [Tab] Next Field | [Esc] Cancel".to_string(),
+                 AddWorkoutField::Exercise =>
+                     "Type name/alias | [Tab] Next Field | [Esc] Cancel".to_string(),
+                 AddWorkoutField::Suggestions =>
+                     "[↑↓] Select | [Enter] Confirm Suggestion | [Esc/Tab] Back to Input".to_string(),
+                 _ => // Generic hint for other fields
+                      "[Esc] Cancel | [Enter] Confirm/Next | [Tab/↑↓] Navigate | [↑↓ Arrow] Inc/Dec Number ".to_string(),
+             }
+             },
          ActiveModal::CreateExercise { .. } => " [Esc] Cancel | [Enter] Confirm/Next | [Tab/↑↓/←→] Navigate ".to_string()
      };
 

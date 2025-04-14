@@ -60,6 +60,7 @@ pub enum SetTargetWeightField {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AddWorkoutField {
     Exercise, // Text input for exercise name/alias
+    Suggestions,
     Sets,
     Reps,
     Weight,
@@ -96,6 +97,11 @@ pub enum ActiveModal {
         notes_input: String,
         focused_field: AddWorkoutField,
         error_message: Option<String>,
+        all_exercise_identifiers: Vec<String>,
+        // Holds the currently filtered suggestions based on input
+        exercise_suggestions: Vec<String>,
+        // State for navigating the suggestion list
+        suggestion_list_state: ListState,
         // Store the resolved definition temporarily after user leaves exercise field
         resolved_exercise: Option<ExerciseDefinition>,
     },
@@ -150,7 +156,8 @@ impl App {
         let mut app = App {
             active_tab: ActiveTab::Log,
             should_quit: false,
-            active_modal: ActiveModal::None,
+            active_modal: ActiveModal::None, // Initialize with None
+            // ... other fields ...
             log_focus: LogFocus::ExerciseList,
             log_viewed_date: today,
             log_exercises_today: Vec::new(),
@@ -205,5 +212,20 @@ impl App {
             Ok(workouts) if !workouts.is_empty() => workouts.into_iter().next(),
             _ => None,
         }
+    }
+
+    pub fn get_all_exercise_identifiers(&self) -> Vec<String> {
+        let mut identifiers = Vec::new();
+        // Add exercise names
+        if let Ok(exercises) = self.service.list_exercises(None, None) {
+            identifiers.extend(exercises.into_iter().map(|e| e.name));
+        }
+        // Add aliases
+        if let Ok(aliases) = self.service.list_aliases() {
+            identifiers.extend(aliases.into_keys());
+        }
+        identifiers.sort_unstable_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+        identifiers.dedup_by(|a, b| a.eq_ignore_ascii_case(b)); // Remove duplicates (like name matching alias)
+        identifiers
     }
 }

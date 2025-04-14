@@ -14,6 +14,7 @@ use super::state::{
 };
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent};
+use ratatui::widgets::ListState;
 use task_athlete_lib::{ExerciseType, Units};
 
 // Make handle_key_event a method on App
@@ -143,25 +144,28 @@ impl App {
 
     fn open_add_workout_modal(&mut self) -> Result<()> {
         let mut initial_exercise_input = String::new();
-        let mut initial_sets = "1".to_string(); // Default to 1
+        let mut initial_sets = "1".to_string();
         let mut initial_reps = String::new();
         let mut initial_weight = String::new();
         let mut initial_duration = String::new();
         let mut initial_distance = String::new();
         let initial_notes = String::new();
-        let mut resolved_exercise = None; // Track resolved exercise type
+        let mut resolved_exercise = None;
+
+        // --- Fetch all identifiers for suggestions ---
+        let all_identifiers = self.get_all_exercise_identifiers();
+        // ---
 
         // Try to pre-fill from selected exercise's last entry
         if let Some(selected_index) = self.log_exercise_list_state.selected() {
             if let Some(selected_exercise_name) = self.log_exercises_today.get(selected_index) {
                 initial_exercise_input = selected_exercise_name.clone();
-                // Resolve to get canonical name and type for fetching last workout
                 match self
                     .service
                     .resolve_exercise_identifier(selected_exercise_name)
                 {
                     Ok(Some(def)) => {
-                        resolved_exercise = Some(def.clone()); // Store definition for later use
+                        resolved_exercise = Some(def.clone());
                         if let Some(last_workout) = self.get_last_workout_for_exercise(&def.name) {
                             initial_sets =
                                 last_workout.sets.map_or("1".to_string(), |v| v.to_string());
@@ -170,11 +174,8 @@ impl App {
                             initial_duration = last_workout
                                 .duration_minutes
                                 .map_or(String::new(), |v| v.to_string());
-
-                            // Pre-fill weight (adjusting for bodyweight)
                             if def.type_ == ExerciseType::BodyWeight {
-                                // Show only *added* weight
-                                let bodyweight_used = self.service.config.bodyweight.unwrap_or(0.0); // Assume 0 if not set
+                                let bodyweight_used = self.service.config.bodyweight.unwrap_or(0.0);
                                 let added_weight = last_workout
                                     .weight
                                     .map_or(0.0, |w| w - bodyweight_used)
@@ -187,8 +188,6 @@ impl App {
                                     .weight
                                     .map_or(String::new(), |v| format!("{:.1}", v));
                             }
-
-                            // Pre-fill distance (converting km back to user units)
                             if let Some(dist_km) = last_workout.distance {
                                 let display_dist = match self.service.config.units {
                                     Units::Metric => dist_km,
@@ -198,14 +197,14 @@ impl App {
                             }
                         }
                     }
-                    Ok(None) => { /* Exercise name exists in today's log but not definition? Unlikely but possible */
-                    }
+                    Ok(None) => { /* Handle unlikely case */ }
                     Err(e) => {
                         self.set_error(format!("Error resolving exercise: {}", e));
                     }
                 }
             }
         }
+
         self.active_modal = ActiveModal::AddWorkout {
             exercise_input: initial_exercise_input,
             sets_input: initial_sets,
@@ -214,11 +213,41 @@ impl App {
             duration_input: initial_duration,
             distance_input: initial_distance,
             notes_input: initial_notes,
-            focused_field: AddWorkoutField::Exercise, // Start focus on exercise
+            focused_field: AddWorkoutField::Exercise,
             error_message: None,
-            resolved_exercise, // Store the potentially resolved definition
+            resolved_exercise,
+            // --- Initialize suggestion state ---
+            all_exercise_identifiers: all_identifiers, // Store the full list
+            exercise_suggestions: Vec::new(),          // Start with empty suggestions
+            suggestion_list_state: ListState::default(), // Initialize list state
         };
+        // Trigger initial suggestion filtering if pre-filled
+        self.filter_exercise_suggestions();
         Ok(())
+    }
+
+    pub fn filter_exercise_suggestions(&mut self) {
+        if let ActiveModal::AddWorkout {
+             ref exercise_input,
+             ref all_exercise_identifiers,
+             ref mut exercise_suggestions,
+             ref mut suggestion_list_state,
+             .. // ignore other fields
+         } = self.active_modal {
+            let input_lower = exercise_input.to_lowercase();
+            if input_lower.is_empty() {
+                *exercise_suggestions = Vec::new(); // Clear suggestions if input is empty
+            } else {
+                *exercise_suggestions = all_exercise_identifiers
+                    .iter()
+                    .filter(|identifier| identifier.to_lowercase().starts_with(&input_lower))
+                    .cloned()
+                    .take(5) // Limit suggestions to a reasonable number (e.g., 5)
+                    .collect();
+            }
+             // Reset selection when suggestions change
+            suggestion_list_state.select(if exercise_suggestions.is_empty() { None } else { Some(0) });
+         }
     }
 
     fn open_create_exercise_modal(&mut self) -> Result<()> {

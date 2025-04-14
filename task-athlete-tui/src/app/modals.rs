@@ -321,6 +321,9 @@ pub fn handle_add_workout_modal_input(app: &mut App, key: KeyEvent) -> Result<()
     let mut submission_result: Result<(), AppInputError> = Ok(());
     let mut should_submit = false;
 
+    // Use a flag to defer filtering until after the borrow ends if needed
+    let mut needs_suggestion_update = false;
+
     if let ActiveModal::AddWorkout {
         ref mut exercise_input,
         ref mut sets_input,
@@ -331,108 +334,257 @@ pub fn handle_add_workout_modal_input(app: &mut App, key: KeyEvent) -> Result<()
         ref mut notes_input,
         ref mut focused_field,
         ref mut error_message,
-        ref mut resolved_exercise, // Mutable access to store resolved def
+        ref mut resolved_exercise,
+        ref mut exercise_suggestions,  // Get mutable access
+        ref mut suggestion_list_state, // Get mutable access
+        ref all_exercise_identifiers,  // Read-only access is fine here
     } = app.active_modal
     {
-        // Always clear error on any input
+        // Always clear error on any input changes within the modal
+        // But maybe not on simple navigation within suggestions? Let's clear it for now.
         *error_message = None;
-        let mut focus_changed = false; // Track if focus changes due to input
+        let mut focus_changed = false;
 
-        match focused_field {
+        // --- Main Input Handling Logic ---
+        match *focused_field {
             AddWorkoutField::Exercise => match key.code {
                 KeyCode::Char(c) => {
                     exercise_input.push(c);
-                    *resolved_exercise = None; // Invalidate resolution when typing
+                    *resolved_exercise = None; // Invalidate resolution
+                    needs_suggestion_update = true; // Filter suggestions after borrow
                 }
                 KeyCode::Backspace => {
                     exercise_input.pop();
-                    *resolved_exercise = None; // Invalidate resolution when typing
+                    *resolved_exercise = None; // Invalidate resolution
+                    needs_suggestion_update = true; // Filter suggestions after borrow
                 }
-                KeyCode::Enter | KeyCode::Down | KeyCode::Tab => {
-                    // Attempt to resolve exercise before moving focus
-                    match app.service.resolve_exercise_identifier(exercise_input) {
-                        Ok(Some(def)) => {
-                            *exercise_input = def.name.clone(); // Update input to canonical name
-                            *resolved_exercise = Some(def);
-                            *focused_field = AddWorkoutField::Sets;
-                            focus_changed = true;
-                        }
-                        Ok(None) => {
-                            *error_message =
-                                Some(format!("Exercise '{}' not found.", exercise_input));
-                            *resolved_exercise = None;
-                        }
-                        Err(e) => {
-                            *error_message = Some(format!("Error: {}", e));
-                            *resolved_exercise = None;
+                KeyCode::Down => {
+                    // Move focus to suggestions *if* they exist
+                    if !exercise_suggestions.is_empty() {
+                        *focused_field = AddWorkoutField::Suggestions;
+                        suggestion_list_state.select(Some(0)); // Select first suggestion
+                        focus_changed = true;
+                    } else {
+                        // No suggestions, behave like Tab (go to Sets)
+                        *focused_field = AddWorkoutField::Sets;
+                        focus_changed = true;
+                        // Attempt to resolve before moving (like Tab)
+                        if resolved_exercise.is_none() {
+                            match app.service.resolve_exercise_identifier(exercise_input) {
+                                Ok(Some(def)) => {
+                                    *exercise_input = def.name.clone();
+                                    *resolved_exercise = Some(def);
+                                }
+                                Ok(None) => {
+                                    *error_message =
+                                        Some(format!("Exercise '{}' not found.", exercise_input));
+                                }
+                                Err(e) => {
+                                    *error_message = Some(format!("Error: {}", e));
+                                }
+                            }
                         }
                     }
                 }
-                KeyCode::Up => *focused_field = AddWorkoutField::Cancel, // Wrap around
+                KeyCode::Tab => {
+                    // Attempt to resolve current input before moving
+                    if resolved_exercise.is_none() && !exercise_input.is_empty() {
+                        match app.service.resolve_exercise_identifier(exercise_input) {
+                            Ok(Some(def)) => {
+                                *exercise_input = def.name.clone(); // Update input to canonical name
+                                *resolved_exercise = Some(def);
+                                *focused_field = AddWorkoutField::Sets;
+                                focus_changed = true;
+                                // Clear suggestions after resolving/moving away
+                                *exercise_suggestions = Vec::new();
+                                suggestion_list_state.select(None);
+                            }
+                            Ok(None) => {
+                                *error_message = Some(format!(
+                                    "Exercise '{}' not found. Cannot move.",
+                                    exercise_input
+                                ));
+                            } // Stay if not resolved
+                            Err(e) => {
+                                *error_message =
+                                    Some(format!("Error resolving: {}. Cannot move.", e));
+                            } // Stay if error
+                        }
+                    } else if resolved_exercise.is_some() || exercise_input.is_empty() {
+                        // Move if already resolved or empty
+                        *focused_field = AddWorkoutField::Sets;
+                        focus_changed = true;
+                        *exercise_suggestions = Vec::new(); // Clear suggestions
+                        suggestion_list_state.select(None);
+                    }
+                }
+                KeyCode::Up => {
+                    // Wrap around to Cancel
+                    *focused_field = AddWorkoutField::Cancel;
+                    focus_changed = true;
+                    *exercise_suggestions = Vec::new(); // Clear suggestions
+                    suggestion_list_state.select(None);
+                }
                 KeyCode::Esc => {
                     app.active_modal = ActiveModal::None;
                     return Ok(());
                 }
+                // Ignore Enter in the input field when suggestions might be active
+                // KeyCode::Enter => { ... }
                 _ => {}
             },
-            AddWorkoutField::Sets => match key.code {
-                KeyCode::Char(c) if c.is_digit(10) => sets_input.push(c),
-                KeyCode::Backspace => {
-                    sets_input.pop();
+
+            AddWorkoutField::Suggestions => match key.code {
+                KeyCode::Char(c) => {
+                    // Typing while suggestions focused -> return to input field
+                    exercise_input.push(c);
+                    *resolved_exercise = None;
+                    needs_suggestion_update = true;
+                    *focused_field = AddWorkoutField::Exercise; // Return focus
+                    focus_changed = true;
                 }
-                KeyCode::Up => modify_numeric_input(sets_input, 1i64, Some(0i64), false),
-                KeyCode::Down => modify_numeric_input(sets_input, -1i64, Some(0i64), false),
-                KeyCode::Enter | KeyCode::Down | KeyCode::Tab => {
-                    *focused_field = AddWorkoutField::Reps;
+                KeyCode::Backspace => {
+                    // Backspace while suggestions focused -> return to input field
+                    exercise_input.pop();
+                    *resolved_exercise = None;
+                    needs_suggestion_update = true;
+                    *focused_field = AddWorkoutField::Exercise; // Return focus
                     focus_changed = true;
                 }
                 KeyCode::Up => {
+                    if !exercise_suggestions.is_empty() {
+                        let current_selection = suggestion_list_state.selected().unwrap_or(0);
+                        let new_selection = if current_selection == 0 {
+                            exercise_suggestions.len() - 1
+                        } else {
+                            current_selection - 1
+                        };
+                        suggestion_list_state.select(Some(new_selection));
+                    }
+                }
+                KeyCode::Down => {
+                    if !exercise_suggestions.is_empty() {
+                        let current_selection = suggestion_list_state.selected().unwrap_or(0);
+                        let new_selection = if current_selection >= exercise_suggestions.len() - 1 {
+                            0
+                        } else {
+                            current_selection + 1
+                        };
+                        suggestion_list_state.select(Some(new_selection));
+                    }
+                }
+                KeyCode::Enter => {
+                    // Select the suggestion
+                    if let Some(selected_index) = suggestion_list_state.selected() {
+                        if let Some(selected_suggestion) = exercise_suggestions.get(selected_index)
+                        {
+                            *exercise_input = selected_suggestion.clone();
+                            // Attempt to resolve the selected suggestion
+                            match app.service.resolve_exercise_identifier(selected_suggestion) {
+                                Ok(Some(def)) => {
+                                    *exercise_input = def.name.clone(); // Ensure canonical name
+                                    *resolved_exercise = Some(def);
+                                    *focused_field = AddWorkoutField::Sets; // Move to next field
+                                    focus_changed = true;
+                                    // Clear suggestions after selection
+                                    *exercise_suggestions = Vec::new();
+                                    suggestion_list_state.select(None);
+                                }
+                                Ok(None) => {
+                                    // Should ideally not happen if suggestions are from DB
+                                    *error_message = Some(format!(
+                                        "Could not resolve selected '{}'.",
+                                        selected_suggestion
+                                    ));
+                                    *focused_field = AddWorkoutField::Exercise; // Go back to input
+                                    focus_changed = true;
+                                }
+                                Err(e) => {
+                                    *error_message =
+                                        Some(format!("Error resolving selected: {}", e));
+                                    *focused_field = AddWorkoutField::Exercise; // Go back to input
+                                    focus_changed = true;
+                                }
+                            }
+                        }
+                    } else {
+                        // If somehow Enter hit with no selection, go back to input
+                        *focused_field = AddWorkoutField::Exercise;
+                        focus_changed = true;
+                    }
+                }
+                KeyCode::Tab | KeyCode::Esc => {
+                    // Exit suggestion list back to input field
                     *focused_field = AddWorkoutField::Exercise;
                     focus_changed = true;
-                }
-                KeyCode::Esc => {
-                    app.active_modal = ActiveModal::None;
-                    return Ok(());
-                }
-                _ => {}
-            },
-            AddWorkoutField::Reps => match key.code {
-                KeyCode::Char(c) if c.is_digit(10) => reps_input.push(c),
-                KeyCode::Backspace => {
-                    reps_input.pop();
-                }
-                KeyCode::Up => modify_numeric_input(reps_input, 1i64, Some(0i64), false),
-                KeyCode::Down => modify_numeric_input(reps_input, -1i64, Some(0i64), false),
-                KeyCode::Enter | KeyCode::Down | KeyCode::Tab => {
-                    *focused_field = AddWorkoutField::Weight;
-                    focus_changed = true;
-                }
-                KeyCode::Up => {
-                    *focused_field = AddWorkoutField::Sets;
-                    focus_changed = true;
-                }
-                KeyCode::Esc => {
-                    app.active_modal = ActiveModal::None;
-                    return Ok(());
+                    // Keep suggestions visible for now when going back via Esc/Tab
+                    // *exercise_suggestions = Vec::new();
+                    // suggestion_list_state.select(None);
                 }
                 _ => {}
             },
-            AddWorkoutField::Weight => {
-                let weight_unit = match app.service.config.units {
-                    Units::Metric => "kg",
-                    Units::Imperial => "lbs",
-                };
-                let added_label = resolved_exercise
-                    .as_ref()
-                    .map_or(false, |def| def.type_ == ExerciseType::BodyWeight);
-                // TODO: Update label dynamically in UI to show "(Added Weight)" or similar
 
+            // --- Handle other fields (Sets, Reps, etc.) ---
+            // Important: Clear suggestions when moving away from Exercise/Suggestions focus
+            AddWorkoutField::Sets => {
+                *exercise_suggestions = Vec::new();
+                suggestion_list_state.select(None); // Clear suggestions
+                match key.code {
+                    KeyCode::Char(c) if c.is_digit(10) => sets_input.push(c),
+                    KeyCode::Backspace => {
+                        sets_input.pop();
+                    }
+                    KeyCode::Up => modify_numeric_input(sets_input, 1i64, Some(1i64), false), // Min sets 1
+                    KeyCode::Down => modify_numeric_input(sets_input, -1i64, Some(1i64), false),
+                    KeyCode::Enter | KeyCode::Down | KeyCode::Tab => {
+                        *focused_field = AddWorkoutField::Reps;
+                        focus_changed = true;
+                    }
+                    KeyCode::Up => {
+                        *focused_field = AddWorkoutField::Exercise;
+                        focus_changed = true;
+                    } // Go back to Exercise
+                    KeyCode::Esc => {
+                        app.active_modal = ActiveModal::None;
+                        return Ok(());
+                    }
+                    _ => {}
+                }
+            }
+            AddWorkoutField::Reps => {
+                *exercise_suggestions = Vec::new();
+                suggestion_list_state.select(None); // Clear suggestions
+                match key.code {
+                    KeyCode::Char(c) if c.is_digit(10) => reps_input.push(c),
+                    KeyCode::Backspace => {
+                        reps_input.pop();
+                    }
+                    KeyCode::Up => modify_numeric_input(reps_input, 1i64, Some(0i64), false),
+                    KeyCode::Down => modify_numeric_input(reps_input, -1i64, Some(0i64), false),
+                    KeyCode::Enter | KeyCode::Down | KeyCode::Tab => {
+                        *focused_field = AddWorkoutField::Weight;
+                        focus_changed = true;
+                    }
+                    KeyCode::Up => {
+                        *focused_field = AddWorkoutField::Sets;
+                        focus_changed = true;
+                    }
+                    KeyCode::Esc => {
+                        app.active_modal = ActiveModal::None;
+                        return Ok(());
+                    }
+                    _ => {}
+                }
+            }
+            AddWorkoutField::Weight => {
+                *exercise_suggestions = Vec::new();
+                suggestion_list_state.select(None); // Clear suggestions
                 match key.code {
                     KeyCode::Char(c) if "0123456789.".contains(c) => weight_input.push(c),
                     KeyCode::Backspace => {
                         weight_input.pop();
                     }
-                    KeyCode::Up => modify_numeric_input(weight_input, 0.5f64, Some(0.0f64), true), // Adjust step as needed
+                    KeyCode::Up => modify_numeric_input(weight_input, 0.5f64, Some(0.0f64), true),
                     KeyCode::Down => {
                         modify_numeric_input(weight_input, -0.5f64, Some(0.0f64), true)
                     }
@@ -451,40 +603,40 @@ pub fn handle_add_workout_modal_input(app: &mut App, key: KeyEvent) -> Result<()
                     _ => {}
                 }
             }
-            AddWorkoutField::Duration => match key.code {
-                KeyCode::Char(c) if c.is_digit(10) => duration_input.push(c),
-                KeyCode::Backspace => {
-                    duration_input.pop();
+            AddWorkoutField::Duration => {
+                *exercise_suggestions = Vec::new();
+                suggestion_list_state.select(None); // Clear suggestions
+                match key.code {
+                    KeyCode::Char(c) if c.is_digit(10) => duration_input.push(c),
+                    KeyCode::Backspace => {
+                        duration_input.pop();
+                    }
+                    KeyCode::Up => modify_numeric_input(duration_input, 1i64, Some(0i64), false),
+                    KeyCode::Down => modify_numeric_input(duration_input, -1i64, Some(0i64), false),
+                    KeyCode::Enter | KeyCode::Down | KeyCode::Tab => {
+                        *focused_field = AddWorkoutField::Distance;
+                        focus_changed = true;
+                    }
+                    KeyCode::Up => {
+                        *focused_field = AddWorkoutField::Weight;
+                        focus_changed = true;
+                    }
+                    KeyCode::Esc => {
+                        app.active_modal = ActiveModal::None;
+                        return Ok(());
+                    }
+                    _ => {}
                 }
-                KeyCode::Up => modify_numeric_input(duration_input, 1i64, Some(0i64), false), // Increment by 1 min
-                KeyCode::Down => modify_numeric_input(duration_input, -1i64, Some(0i64), false),
-                KeyCode::Enter | KeyCode::Down | KeyCode::Tab => {
-                    *focused_field = AddWorkoutField::Distance;
-                    focus_changed = true;
-                }
-                KeyCode::Up => {
-                    *focused_field = AddWorkoutField::Weight;
-                    focus_changed = true;
-                }
-                KeyCode::Esc => {
-                    app.active_modal = ActiveModal::None;
-                    return Ok(());
-                }
-                _ => {}
-            },
+            }
             AddWorkoutField::Distance => {
-                let dist_unit = match app.service.config.units {
-                    Units::Metric => "km",
-                    Units::Imperial => "mi",
-                };
-                // TODO: Update label dynamically in UI
-
+                *exercise_suggestions = Vec::new();
+                suggestion_list_state.select(None); // Clear suggestions
                 match key.code {
                     KeyCode::Char(c) if "0123456789.".contains(c) => distance_input.push(c),
                     KeyCode::Backspace => {
                         distance_input.pop();
                     }
-                    KeyCode::Up => modify_numeric_input(distance_input, 0.1f64, Some(0.0f64), true), // Increment by 0.1
+                    KeyCode::Up => modify_numeric_input(distance_input, 0.1f64, Some(0.0f64), true),
                     KeyCode::Down => {
                         modify_numeric_input(distance_input, -0.1f64, Some(0.0f64), true)
                     }
@@ -503,82 +655,103 @@ pub fn handle_add_workout_modal_input(app: &mut App, key: KeyEvent) -> Result<()
                     _ => {}
                 }
             }
-            AddWorkoutField::Notes => match key.code {
-                KeyCode::Char(c) => notes_input.push(c),
-                KeyCode::Backspace => {
-                    notes_input.pop();
+            AddWorkoutField::Notes => {
+                *exercise_suggestions = Vec::new();
+                suggestion_list_state.select(None); // Clear suggestions
+                match key.code {
+                    KeyCode::Char(c) => notes_input.push(c),
+                    KeyCode::Backspace => {
+                        notes_input.pop();
+                    }
+                    // Allow Enter for multiline notes? Maybe not for simple TUI. Treat like Tab.
+                    KeyCode::Enter | KeyCode::Down | KeyCode::Tab => {
+                        *focused_field = AddWorkoutField::Confirm;
+                        focus_changed = true;
+                    }
+                    KeyCode::Up => {
+                        *focused_field = AddWorkoutField::Distance;
+                        focus_changed = true;
+                    }
+                    KeyCode::Esc => {
+                        app.active_modal = ActiveModal::None;
+                        return Ok(());
+                    }
+                    _ => {}
                 }
-                KeyCode::Enter | KeyCode::Down | KeyCode::Tab => {
-                    *focused_field = AddWorkoutField::Confirm;
-                    focus_changed = true;
+            }
+            AddWorkoutField::Confirm => {
+                *exercise_suggestions = Vec::new();
+                suggestion_list_state.select(None); // Clear suggestions
+                match key.code {
+                    KeyCode::Enter => {
+                        should_submit = true;
+                    }
+                    KeyCode::Left | KeyCode::Backspace => {
+                        *focused_field = AddWorkoutField::Cancel;
+                        focus_changed = true;
+                    }
+                    KeyCode::Up => {
+                        *focused_field = AddWorkoutField::Notes;
+                        focus_changed = true;
+                    }
+                    KeyCode::Down | KeyCode::Tab | KeyCode::Right => {
+                        *focused_field = AddWorkoutField::Cancel;
+                        focus_changed = true;
+                    }
+                    KeyCode::Esc => {
+                        app.active_modal = ActiveModal::None;
+                        return Ok(());
+                    }
+                    _ => {}
                 }
-                KeyCode::Up => {
-                    *focused_field = AddWorkoutField::Distance;
-                    focus_changed = true;
+            }
+            AddWorkoutField::Cancel => {
+                *exercise_suggestions = Vec::new();
+                suggestion_list_state.select(None); // Clear suggestions
+                match key.code {
+                    KeyCode::Enter | KeyCode::Esc => {
+                        app.active_modal = ActiveModal::None;
+                        return Ok(());
+                    }
+                    KeyCode::Right | KeyCode::Tab => {
+                        *focused_field = AddWorkoutField::Confirm;
+                        focus_changed = true;
+                    }
+                    KeyCode::Left | KeyCode::Backspace => {
+                        *focused_field = AddWorkoutField::Confirm;
+                        focus_changed = true;
+                    } // Cycle left from Cancel goes to Confirm
+                    KeyCode::Up => {
+                        *focused_field = AddWorkoutField::Notes;
+                        focus_changed = true;
+                    }
+                    KeyCode::Down => {
+                        *focused_field = AddWorkoutField::Exercise;
+                        focus_changed = true;
+                    } // Wrap around down
+                    _ => {}
                 }
-                KeyCode::Esc => {
-                    app.active_modal = ActiveModal::None;
-                    return Ok(());
-                }
-                _ => {}
-            },
-            AddWorkoutField::Confirm => match key.code {
-                KeyCode::Enter => {
-                    // ONLY set the flag here. Do NOT clone yet.
-                    should_submit = true;
-                }
-                KeyCode::Left | KeyCode::Backspace => {
-                    *focused_field = AddWorkoutField::Cancel;
-                    focus_changed = true;
-                }
-                KeyCode::Up => {
-                    *focused_field = AddWorkoutField::Notes;
-                    focus_changed = true;
-                }
-                KeyCode::Down | KeyCode::Tab => {
-                    *focused_field = AddWorkoutField::Cancel;
-                    focus_changed = true;
-                }
-                KeyCode::Esc => {
-                    app.active_modal = ActiveModal::None;
-                    return Ok(());
-                }
-                _ => {}
-            },
-            AddWorkoutField::Cancel => match key.code {
-                KeyCode::Enter | KeyCode::Esc => {
-                    app.active_modal = ActiveModal::None;
-                    return Ok(());
-                }
-                KeyCode::Right => {
-                    *focused_field = AddWorkoutField::Confirm;
-                    focus_changed = true;
-                }
-                KeyCode::Up => {
-                    *focused_field = AddWorkoutField::Notes;
-                    focus_changed = true;
-                }
-                KeyCode::Down | KeyCode::Tab => {
-                    *focused_field = AddWorkoutField::Exercise;
-                    focus_changed = true;
-                }
-                _ => {}
-            },
+            }
         }
 
-        // If focus moved away from Exercise field, try to resolve if not already resolved
+        // If focus moved away from Exercise field (but not to Suggestions), try to resolve if not already resolved
         if focus_changed
             && *focused_field != AddWorkoutField::Exercise
+            && *focused_field != AddWorkoutField::Suggestions
             && resolved_exercise.is_none()
         {
             match app.service.resolve_exercise_identifier(exercise_input) {
                 Ok(Some(def)) => {
-                    *exercise_input = def.name.clone(); // Update input to canonical name
+                    *exercise_input = def.name.clone();
                     *resolved_exercise = Some(def);
                 }
                 Ok(None) => {
-                    *error_message = Some(format!("Exercise '{}' not found.", exercise_input));
-                } // Non-blocking error
+                    /* Allow moving away even if not resolved, but show error? */
+                    *error_message = Some(format!(
+                        "Warning: Exercise '{}' not resolved.",
+                        exercise_input
+                    ));
+                }
                 Err(e) => {
                     *error_message = Some(format!("Error: {}", e));
                 }
@@ -586,14 +759,18 @@ pub fn handle_add_workout_modal_input(app: &mut App, key: KeyEvent) -> Result<()
         }
     } // End mutable borrow of app.active_modal
 
+    // --- Filter suggestions (Deferred until borrow ends) ---
+    if needs_suggestion_update {
+        app.filter_exercise_suggestions();
+    }
+
     // --- Submission Logic (runs only if should_submit is true) ---
     if should_submit {
+        // Important: Clone the state *before* calling submit, as submit needs immutable borrow
         let modal_state_clone = app.active_modal.clone();
-        // Ensure it's still the correct modal type before submitting
         if let ActiveModal::AddWorkout { .. } = modal_state_clone {
-            submission_result = submit_add_workout(app, &modal_state_clone); // Pass the clone
+            submission_result = submit_add_workout(app, &modal_state_clone);
         } else {
-            // Handle unlikely case where modal changed state somehow
             submission_result = Err(AppInputError::DbError(
                 "Internal Error: Modal state changed unexpectedly".to_string(),
             ));
@@ -602,9 +779,7 @@ pub fn handle_add_workout_modal_input(app: &mut App, key: KeyEvent) -> Result<()
         // --- Handle Submission Result ---
         if submission_result.is_ok() {
             app.active_modal = ActiveModal::None; // Close modal on success
-                                                  // Refresh handled by main loop
         } else {
-            // Submission failed, need to put error back into modal state
             // Re-borrow mutably ONLY if necessary to set error
             if let ActiveModal::AddWorkout {
                 ref mut error_message,
@@ -612,9 +787,7 @@ pub fn handle_add_workout_modal_input(app: &mut App, key: KeyEvent) -> Result<()
             } = app.active_modal
             {
                 *error_message = Some(submission_result.unwrap_err().to_string());
-                // Keep the modal open
             }
-            // If modal somehow changed state between submit check and here, error is lost (unlikely)
         }
     }
 

@@ -157,7 +157,7 @@ pub struct Workout {
     pub exercise_type: Option<ExerciseType>, // Populated by JOIN
 }
 
-#[derive(Debug, Clone)] // Add Clone
+#[derive(Debug, Clone, PartialEq)] // Add Clone
 pub struct ExerciseDefinition {
     pub id: i64,
     pub name: String,

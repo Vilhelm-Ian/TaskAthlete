@@ -1,4 +1,3 @@
-// task-athlete-tui/src/app/mod.rs
 use thiserror::Error;
 
 // Declare the modules within the app directory
@@ -9,7 +8,17 @@ pub mod navigation;
 pub mod state;
 
 // Re-export the main App struct and other necessary types for convenience
-pub use state::{ActiveModal, ActiveTab, App, BodyweightFocus, LogFocus}; // Add other enums if needed
+pub use state::{
+    ActiveModal,
+    ActiveTab,
+    AddExerciseField,
+    AddWorkoutField,
+    App,
+    BodyweightFocus,
+    LogBodyweightField,
+    LogFocus,
+    SetTargetWeightField, // Add AddExerciseField
+}; // Add other enums if needed
 
 // Define App-specific errors here
 #[derive(Error, Debug, Clone)] // Added Clone
@@ -24,4 +33,6 @@ pub enum AppInputError {
     SelectionRequired,
     #[error("Database error: {0}")] // Generic way to show DB errors in modals
     DbError(String),
+    #[error("Exercise name cannot be empty.")] // NEW specific error
+    ExerciseNameEmpty,
 }

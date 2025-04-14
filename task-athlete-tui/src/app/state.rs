@@ -3,7 +3,7 @@ use crate::app::AppInputError; // Use error from parent mod
 use chrono::Utc;
 use ratatui::widgets::{ListState, TableState};
 use std::time::Instant;
-use task_athlete_lib::{AppService, ExerciseDefinition, Workout, WorkoutFilters}; // Keep lib imports
+use task_athlete_lib::{AppService, ExerciseDefinition, ExerciseType, Workout, WorkoutFilters}; // Keep lib imports
 
 // Represents the active UI tab
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,6 +26,17 @@ pub enum BodyweightFocus {
     Graph,
     Actions,
     History,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AddExerciseField {
+    Name,
+    Muscles,
+    TypeResistance, // Represents focus on the "Resistance" option
+    TypeCardio,     // Represents focus on the "Cardio" option
+    TypeBodyweight, // Represents focus on the "BodyWeight" option
+    Confirm,
+    Cancel,
 }
 
 // Fields within the Log Bodyweight modal
@@ -87,6 +98,13 @@ pub enum ActiveModal {
         error_message: Option<String>,
         // Store the resolved definition temporarily after user leaves exercise field
         resolved_exercise: Option<ExerciseDefinition>,
+    },
+    CreateExercise {
+        name_input: String,
+        muscles_input: String,
+        selected_type: ExerciseType, // Store the currently selected type
+        focused_field: AddExerciseField,
+        error_message: Option<String>,
     },
     // Add more here
 }

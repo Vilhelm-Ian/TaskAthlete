@@ -19,6 +19,7 @@ pub fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
          ActiveModal::LogBodyweight { .. } => " [Esc] Cancel | [Enter] Confirm | [Tab/↑↓] Navigate ".to_string(),
          ActiveModal::SetTargetWeight { .. } => " [Esc] Cancel | [Enter] Confirm | [Tab/↑↓] Navigate ".to_string(),
          ActiveModal::AddWorkout { .. } => " [Esc] Cancel | [Enter] Confirm/Next | [Tab/↑↓] Navigate | [↑↓ Arrow] Inc/Dec Number ".to_string(),
+         ActiveModal::CreateExercise { .. } => " [Esc] Cancel | [Enter] Confirm/Next | [Tab/↑↓/←→] Navigate ".to_string()
      };
 
     let error_text = app.last_error.as_deref().unwrap_or("");

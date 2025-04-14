@@ -2,13 +2,13 @@
 use crate::{
     app::{
         state::{ActiveModal, AddWorkoutField, LogBodyweightField, SetTargetWeightField},
-        App,
+        AddExerciseField, App,
     }, // Use App from crate::app
     ui::layout::centered_rect, // Use centered_rect from layout
-                               // ui::layout::centered_rect_fixed,
+    ui::layout::centered_rect_fixed,
 };
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Margin},
+    layout::{Constraint, Direction, Layout, Margin, Rect},
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
@@ -22,6 +22,7 @@ pub fn render_modal(f: &mut Frame, app: &App) {
         ActiveModal::LogBodyweight { .. } => render_log_bodyweight_modal(f, app),
         ActiveModal::SetTargetWeight { .. } => render_set_target_weight_modal(f, app),
         ActiveModal::AddWorkout { .. } => render_add_workout_modal(f, app),
+        ActiveModal::CreateExercise { .. } => render_create_exercise_modal(f, app),
         ActiveModal::None => {} // Should not happen if called correctly
     }
 }
@@ -598,5 +599,212 @@ fn render_set_target_weight_modal(f: &mut Frame, app: &App) {
             _ => {}
         }
         // --- End Cursor Positioning ---
+    }
+}
+
+fn render_create_exercise_modal(f: &mut Frame, app: &App) {
+    if let ActiveModal::CreateExercise {
+        name_input,
+        muscles_input,
+        selected_type,
+        focused_field,
+        error_message,
+    } = &app.active_modal
+    {
+        let block = Block::default()
+            .title("Create New Exercise")
+            .borders(Borders::ALL)
+            .border_style(Style::new().yellow());
+
+        // --- Calculate Fixed Height ---
+        let mut required_height = 2; // Top/Bottom border/padding
+        required_height += 1; // Name label
+        required_height += 1; // Name input
+        required_height += 1; // Muscles label
+        required_height += 1; // Muscles input
+        required_height += 1; // Type label
+        required_height += 1; // Type options
+        required_height += 1; // Spacer
+        required_height += 1; // Buttons row
+        if error_message.is_some() {
+            required_height += 1; // Error message line
+        }
+        // Add a little extra vertical padding if desired
+        // required_height += 1;
+
+        // --- Use centered_rect_fixed ---
+        let fixed_width = 60; // Keep a fixed width (adjust as needed)
+        let area = centered_rect_fixed(fixed_width, required_height, f.size());
+
+        f.render_widget(Clear, area); // Clear the background
+        f.render_widget(block, area); // Render the block border/title
+
+        // Define the inner area *after* the block border/padding
+        let inner_area = area.inner(&Margin {
+            vertical: 1,
+            horizontal: 1,
+        });
+
+        // --- Layout Constraints ---
+        // Define constraints based on the required elements. The Min(0) handles extra space if any.
+        let mut constraints = vec![
+            Constraint::Length(1), // Name label
+            Constraint::Length(1), // Name input
+            Constraint::Length(1), // Muscles label
+            Constraint::Length(1), // Muscles input
+            Constraint::Length(1), // Type label
+            Constraint::Length(1), // Type options
+            Constraint::Length(1), // Spacer
+            Constraint::Length(1), // Buttons row
+        ];
+        if error_message.is_some() {
+            constraints.push(Constraint::Length(1)); // Error Message
+        }
+        constraints.push(Constraint::Min(0)); // Remainder (handles any extra space from fixed height)
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(constraints) // Use the dynamically built constraints
+            .split(inner_area);
+
+        // --- Render Widgets ---
+        let base_input_style = Style::default().fg(Color::White);
+        let input_margin = Margin {
+            vertical: 0,
+            horizontal: 1,
+        };
+        let base_button_style = Style::default().fg(Color::White);
+
+        // Row 1: Name
+        f.render_widget(Paragraph::new("Name:"), chunks[0]);
+        let name_style = if *focused_field == AddExerciseField::Name {
+            base_input_style.reversed()
+        } else {
+            base_input_style
+        };
+        f.render_widget(
+            Paragraph::new(name_input.as_str()).style(name_style),
+            chunks[1].inner(&input_margin),
+        );
+
+        // Row 2: Muscles
+        f.render_widget(Paragraph::new("Muscles (comma-separated):"), chunks[2]);
+        let muscles_style = if *focused_field == AddExerciseField::Muscles {
+            base_input_style.reversed()
+        } else {
+            base_input_style
+        };
+        f.render_widget(
+            Paragraph::new(muscles_input.as_str()).style(muscles_style),
+            chunks[3].inner(&input_margin),
+        );
+
+        // Row 3: Type
+        f.render_widget(Paragraph::new("Type:"), chunks[4]);
+
+        let type_layout = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(33),
+                Constraint::Percentage(34),
+                Constraint::Percentage(33),
+            ])
+            .split(chunks[5]); // Types in chunk 5
+
+        // Render Type Options (same as before)
+        let res_text = " Resistance ";
+        let res_style = if *selected_type == ExerciseType::Resistance {
+            base_button_style.bg(Color::DarkGray)
+        } else {
+            base_button_style
+        };
+        let res_para = Paragraph::new(res_text)
+            .alignment(ratatui::layout::Alignment::Center)
+            .style(if *focused_field == AddExerciseField::TypeResistance {
+                res_style.reversed()
+            } else {
+                res_style
+            });
+        f.render_widget(res_para, type_layout[0]);
+
+        let card_text = " Cardio ";
+        let card_style = if *selected_type == ExerciseType::Cardio {
+            base_button_style.bg(Color::DarkGray)
+        } else {
+            base_button_style
+        };
+        let card_para = Paragraph::new(card_text)
+            .alignment(ratatui::layout::Alignment::Center)
+            .style(if *focused_field == AddExerciseField::TypeCardio {
+                card_style.reversed()
+            } else {
+                card_style
+            });
+        f.render_widget(card_para, type_layout[1]);
+
+        let bw_text = " BodyWeight ";
+        let bw_style = if *selected_type == ExerciseType::BodyWeight {
+            base_button_style.bg(Color::DarkGray)
+        } else {
+            base_button_style
+        };
+        let bw_para = Paragraph::new(bw_text)
+            .alignment(ratatui::layout::Alignment::Center)
+            .style(if *focused_field == AddExerciseField::TypeBodyweight {
+                bw_style.reversed()
+            } else {
+                bw_style
+            });
+        f.render_widget(bw_para, type_layout[2]);
+
+        // Row 4: Buttons (adjust chunk index based on error message presence)
+        let button_chunk_index = if error_message.is_some() { 8 } else { 7 }; // Spacer is before buttons
+        let button_layout = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(chunks[button_chunk_index]);
+
+        let ok_button = Paragraph::new(" OK ")
+            .alignment(ratatui::layout::Alignment::Center)
+            .style(if *focused_field == AddExerciseField::Confirm {
+                base_button_style.reversed()
+            } else {
+                base_button_style
+            });
+        f.render_widget(ok_button, button_layout[0]);
+
+        let cancel_button = Paragraph::new(" Cancel ")
+            .alignment(ratatui::layout::Alignment::Center)
+            .style(if *focused_field == AddExerciseField::Cancel {
+                base_button_style.reversed()
+            } else {
+                base_button_style
+            });
+        f.render_widget(cancel_button, button_layout[1]);
+
+        // Row 5: Error Message (if present)
+        if let Some(err) = error_message {
+            // Error message is always the second to last chunk before Min(0)
+            let error_chunk_index = chunks.len() - 2;
+            f.render_widget(
+                Paragraph::new(err.as_str()).style(Style::default().fg(Color::Red)),
+                chunks[error_chunk_index],
+            );
+        }
+
+        // --- Cursor Positioning --- (remains the same logic)
+        match focused_field {
+            AddExerciseField::Name => {
+                let cursor_x = (chunks[1].x + 1 + name_input.chars().count() as u16)
+                    .min(chunks[1].right().saturating_sub(1));
+                f.set_cursor(cursor_x, chunks[1].y);
+            }
+            AddExerciseField::Muscles => {
+                let cursor_x = (chunks[3].x + 1 + muscles_input.chars().count() as u16)
+                    .min(chunks[3].right().saturating_sub(1));
+                f.set_cursor(cursor_x, chunks[3].y);
+            }
+            _ => {} // No cursor for type options or buttons
+        }
     }
 }

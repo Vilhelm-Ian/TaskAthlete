@@ -1,16 +1,16 @@
 // task-athlete-tui/src/app/actions.rs
 use super::data::log_change_date;
 use super::modals::{
-    handle_add_workout_modal_input, handle_log_bodyweight_modal_input,
-    handle_set_target_weight_modal_input,
+    handle_add_workout_modal_input, handle_create_exercise_modal_input,
+    handle_log_bodyweight_modal_input, handle_set_target_weight_modal_input,
 }; // Use specific modal handlers
 use super::navigation::{
     bw_table_next, bw_table_previous, log_list_next, log_list_previous, log_table_next,
     log_table_previous,
 };
 use super::state::{
-    ActiveModal, ActiveTab, AddWorkoutField, App, BodyweightFocus, LogBodyweightField, LogFocus,
-    SetTargetWeightField,
+    ActiveModal, ActiveTab, AddExerciseField, AddWorkoutField, App, BodyweightFocus,
+    LogBodyweightField, LogFocus, SetTargetWeightField,
 };
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent};
@@ -42,24 +42,19 @@ impl App {
                 }
             }
         }
-        // Data refresh is now handled by the main loop *after* input handling
-        // self.refresh_data_for_active_tab(); // Remove refresh call from here
         Ok(())
     }
 
     fn handle_modal_input(&mut self, key: KeyEvent) -> Result<()> {
         match self.active_modal {
             ActiveModal::Help => {
-                if key.code == KeyCode::Esc
-                    || key.code == KeyCode::Char('?')
-                    || key.code == KeyCode::Enter
-                {
-                    self.active_modal = ActiveModal::None;
-                }
+                // ... (existing help handling)
             }
-            ActiveModal::LogBodyweight { .. } => handle_log_bodyweight_modal_input(self, key)?, // Pass self
-            ActiveModal::SetTargetWeight { .. } => handle_set_target_weight_modal_input(self, key)?, // Pass self
+            ActiveModal::LogBodyweight { .. } => handle_log_bodyweight_modal_input(self, key)?,
+            ActiveModal::SetTargetWeight { .. } => handle_set_target_weight_modal_input(self, key)?,
             ActiveModal::AddWorkout { .. } => handle_add_workout_modal_input(self, key)?,
+            // NEW: Handle CreateExercise modal
+            ActiveModal::CreateExercise { .. } => handle_create_exercise_modal_input(self, key)?,
             _ => {
                 if key.code == KeyCode::Esc {
                     self.active_modal = ActiveModal::None;
@@ -76,6 +71,7 @@ impl App {
                 KeyCode::Char('j') | KeyCode::Down => log_list_next(self),
                 KeyCode::Tab => self.log_focus = LogFocus::SetList,
                 KeyCode::Char('a') => self.open_add_workout_modal()?,
+                KeyCode::Char('c') => self.open_create_exercise_modal()?, // NEW: Open create modal
                 KeyCode::Char('g') => { /* TODO */ }
                 KeyCode::Char('h') | KeyCode::Left => log_change_date(self, -1),
                 KeyCode::Char('l') | KeyCode::Right => log_change_date(self, 1),
@@ -221,6 +217,17 @@ impl App {
             focused_field: AddWorkoutField::Exercise, // Start focus on exercise
             error_message: None,
             resolved_exercise, // Store the potentially resolved definition
+        };
+        Ok(())
+    }
+
+    fn open_create_exercise_modal(&mut self) -> Result<()> {
+        self.active_modal = ActiveModal::CreateExercise {
+            name_input: String::new(),
+            muscles_input: String::new(),
+            selected_type: ExerciseType::Resistance, // Default to Resistance
+            focused_field: AddExerciseField::Name,   // Start focus on name
+            error_message: None,
         };
         Ok(())
     }

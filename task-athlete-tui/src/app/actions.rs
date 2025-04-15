@@ -15,7 +15,7 @@ use super::state::{
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::widgets::ListState;
-use task_athlete_lib::{ExerciseType, Units};
+use task_athlete_lib::{ExerciseDefinition, ExerciseType, Units, Workout};
 
 // Make handle_key_event a method on App
 impl App {
@@ -49,7 +49,12 @@ impl App {
     fn handle_modal_input(&mut self, key: KeyEvent) -> Result<()> {
         match self.active_modal {
             ActiveModal::Help => {
-                // ... (existing help handling)
+                match key.code {
+                    KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter | KeyCode::Char('?') => {
+                        self.active_modal = ActiveModal::None;
+                    }
+                    _ => {} // Ignore other keys in help
+                }
             }
             ActiveModal::LogBodyweight { .. } => handle_log_bodyweight_modal_input(self, key)?,
             ActiveModal::SetTargetWeight { .. } => handle_set_target_weight_modal_input(self, key)?,
@@ -152,9 +157,8 @@ impl App {
         let initial_notes = String::new();
         let mut resolved_exercise = None;
 
-        // --- Fetch all identifiers for suggestions ---
+        // Fetch all identifiers for suggestions
         let all_identifiers = self.get_all_exercise_identifiers();
-        // ---
 
         // Try to pre-fill from selected exercise's last entry
         if let Some(selected_index) = self.log_exercise_list_state.selected() {
@@ -165,41 +169,22 @@ impl App {
                     .resolve_exercise_identifier(selected_exercise_name)
                 {
                     Ok(Some(def)) => {
+                        let last_workout = self.get_last_workout_for_exercise(&def.name);
+                        self.populate_workout_inputs_from_def_and_last_workout(
+                            &def,
+                            last_workout,
+                            &mut initial_sets,
+                            &mut initial_reps,
+                            &mut initial_weight,
+                            &mut initial_duration,
+                            &mut initial_distance,
+                        );
                         resolved_exercise = Some(def.clone());
-                        if let Some(last_workout) = self.get_last_workout_for_exercise(&def.name) {
-                            initial_sets =
-                                last_workout.sets.map_or("1".to_string(), |v| v.to_string());
-                            initial_reps =
-                                last_workout.reps.map_or(String::new(), |v| v.to_string());
-                            initial_duration = last_workout
-                                .duration_minutes
-                                .map_or(String::new(), |v| v.to_string());
-                            if def.type_ == ExerciseType::BodyWeight {
-                                let bodyweight_used = self.service.config.bodyweight.unwrap_or(0.0);
-                                let added_weight = last_workout
-                                    .weight
-                                    .map_or(0.0, |w| w - bodyweight_used)
-                                    .max(0.0);
-                                if added_weight > 0.0 {
-                                    initial_weight = format!("{:.1}", added_weight);
-                                }
-                            } else {
-                                initial_weight = last_workout
-                                    .weight
-                                    .map_or(String::new(), |v| format!("{:.1}", v));
-                            }
-                            if let Some(dist_km) = last_workout.distance {
-                                let display_dist = match self.service.config.units {
-                                    Units::Metric => dist_km,
-                                    Units::Imperial => dist_km * 0.621371,
-                                };
-                                initial_distance = format!("{:.1}", display_dist);
-                            }
-                        }
                     }
-                    Ok(None) => { /* Handle unlikely case */ }
+                    Ok(None) => { /* Handle unlikely case where selected name doesn't resolve */ }
                     Err(e) => {
                         self.set_error(format!("Error resolving exercise: {}", e));
+                        // Proceed without pre-filling fields if resolution fails
                     }
                 }
             }
@@ -216,14 +201,70 @@ impl App {
             focused_field: AddWorkoutField::Exercise,
             error_message: None,
             resolved_exercise,
-            // --- Initialize suggestion state ---
-            all_exercise_identifiers: all_identifiers, // Store the full list
-            exercise_suggestions: Vec::new(),          // Start with empty suggestions
-            suggestion_list_state: ListState::default(), // Initialize list state
+            all_exercise_identifiers: all_identifiers,
+            exercise_suggestions: Vec::new(), // Start with empty suggestions ALWAYS
+            suggestion_list_state: ListState::default(),
         };
-        // Trigger initial suggestion filtering if pre-filled
-        self.filter_exercise_suggestions();
         Ok(())
+    }
+
+    // Helper to populate workout fields based on resolved exercise and last workout
+    fn populate_workout_inputs_from_def_and_last_workout(
+        &self,
+        def: &ExerciseDefinition,
+        last_workout_opt: Option<Workout>,
+        sets_input: &mut String,
+        reps_input: &mut String,
+        weight_input: &mut String,
+        duration_input: &mut String,
+        distance_input: &mut String,
+        // notes_input: &mut String, // Notes are usually not pre-filled
+    ) {
+        if let Some(last_workout) = last_workout_opt {
+            *sets_input = last_workout.sets.map_or("1".to_string(), |v| v.to_string());
+            *reps_input = last_workout.reps.map_or(String::new(), |v| v.to_string());
+            *duration_input = last_workout
+                .duration_minutes
+                .map_or(String::new(), |v| v.to_string());
+            // *notes_input = last_workout.notes.clone().unwrap_or_default(); // Optionally prefill notes
+
+            // Weight logic
+            if def.type_ == ExerciseType::BodyWeight {
+                let bodyweight_used = self.service.config.bodyweight.unwrap_or(0.0);
+                let added_weight = last_workout
+                    .weight
+                    .map_or(0.0, |w| w - bodyweight_used)
+                    .max(0.0);
+                *weight_input = if added_weight > 0.0 {
+                    format!("{:.1}", added_weight)
+                } else {
+                    String::new() // Clear if only bodyweight was used
+                };
+            } else {
+                *weight_input = last_workout
+                    .weight
+                    .map_or(String::new(), |v| format!("{:.1}", v));
+            }
+
+            // Distance Logic
+            if let Some(dist_km) = last_workout.distance {
+                let display_dist = match self.service.config.units {
+                    Units::Metric => dist_km,
+                    Units::Imperial => dist_km * 0.621371,
+                };
+                *distance_input = format!("{:.1}", display_dist);
+            } else {
+                *distance_input = String::new(); // Clear distance if not present
+            }
+        } else {
+            // Reset fields if no last workout found for this exercise
+            *sets_input = "1".to_string();
+            *reps_input = String::new();
+            *weight_input = String::new();
+            *duration_input = String::new();
+            *distance_input = String::new();
+            // *notes_input = String::new();
+        }
     }
 
     pub fn filter_exercise_suggestions(&mut self) {

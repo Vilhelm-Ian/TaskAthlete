@@ -1,6 +1,6 @@
 //src/app/state.rs
 // task-athlete-tui/src/app/state.rs
-use crate::app::AppInputError; // Use error from parent mod
+ // Use error from parent mod
 use chrono::Utc;
 use ratatui::widgets::{ListState, TableState};
 use std::time::Instant;
@@ -251,7 +251,7 @@ impl App {
         if let Ok(aliases) = self.service.list_aliases() {
             identifiers.extend(aliases.into_keys());
         }
-        identifiers.sort_unstable_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+        identifiers.sort_unstable_by_key(|a| a.to_lowercase());
         identifiers.dedup_by(|a, b| a.eq_ignore_ascii_case(b)); // Remove duplicates (like name matching alias)
         identifiers
     }

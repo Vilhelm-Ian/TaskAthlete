@@ -9,15 +9,10 @@ pub mod state;
 
 // Re-export the main App struct and other necessary types for convenience
 pub use state::{
-    ActiveModal,
     ActiveTab,
     AddExerciseField,
     AddWorkoutField,
-    App,
-    BodyweightFocus,
-    LogBodyweightField,
-    LogFocus,
-    SetTargetWeightField, // Add AddExerciseField
+    App, // Add AddExerciseField
 }; // Add other enums if needed
 
 // Define App-specific errors here

@@ -1,5 +1,5 @@
 use super::state::App;
-use chrono::{Datelike, Duration, NaiveDate, TimeZone, Utc};
+use chrono::{Datelike, Duration, NaiveDate, Utc};
 use task_athlete_lib::{DbError, Workout, WorkoutFilters};
 
 // Make refresh logic methods on App

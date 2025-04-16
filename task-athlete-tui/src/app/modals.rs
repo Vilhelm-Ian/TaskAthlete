@@ -2,11 +2,11 @@ use super::state::{
     ActiveModal, AddExerciseField, AddWorkoutField, App, LogBodyweightField, SetTargetWeightField,
 };
 use super::AppInputError;
-use anyhow::{bail, Result};
+use anyhow::Result;
 use chrono::{Duration, NaiveDate, TimeZone, Utc};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::str::FromStr;
-use task_athlete_lib::{DbError, ExerciseDefinition, ExerciseType, Units};
+use task_athlete_lib::{DbError, ExerciseDefinition, ExerciseType};
 
 // --- Parsing Helpers (moved here) ---
 
@@ -21,14 +21,13 @@ fn parse_optional_int<T: FromStr>(input: &str) -> Result<Option<T>, AppInputErro
             .map_err(|_| {
                 AppInputError::InvalidNumber(format!("'{}' is not a valid integer", trimmed))
             })
-            .and_then(|opt_val| {
+            .inspect(|opt_val| {
                 // Basic validation (can be extended)
                 if let Some(val) = opt_val.as_ref() {
                     // Assuming T supports comparison with 0 (like i64)
                     // This requires a bound, maybe add later if T is generic
                     // if *val < 0 { return Err(AppInputError::InvalidNumber("Value cannot be negative".into())) }
                 }
-                Ok(opt_val)
             })
     }
 }
@@ -430,7 +429,7 @@ pub fn handle_edit_workout_modal_input(app: &mut App, key: KeyEvent) -> Result<(
                 }
                 AddWorkoutField::Sets => {
                     match key.code {
-                        KeyCode::Char(c) if c.is_digit(10) => sets_input.push(c),
+                        KeyCode::Char(c) if c.is_ascii_digit() => sets_input.push(c),
                         KeyCode::Backspace => {
                             sets_input.pop();
                         }
@@ -456,7 +455,7 @@ pub fn handle_edit_workout_modal_input(app: &mut App, key: KeyEvent) -> Result<(
                     }
                 }
                 AddWorkoutField::Reps => match key.code {
-                    KeyCode::Char(c) if c.is_digit(10) => reps_input.push(c),
+                    KeyCode::Char(c) if c.is_ascii_digit() => reps_input.push(c),
                     KeyCode::Backspace => {
                         reps_input.pop();
                     }
@@ -508,7 +507,7 @@ pub fn handle_edit_workout_modal_input(app: &mut App, key: KeyEvent) -> Result<(
                     _ => {}
                 },
                 AddWorkoutField::Duration => match key.code {
-                    KeyCode::Char(c) if c.is_digit(10) => duration_input.push(c),
+                    KeyCode::Char(c) if c.is_ascii_digit() => duration_input.push(c),
                     KeyCode::Backspace => {
                         duration_input.pop();
                     }
@@ -903,7 +902,7 @@ pub fn handle_add_workout_modal_input(app: &mut App, key: KeyEvent) -> Result<()
              AddWorkoutField::Sets => {
                 *exercise_suggestions = Vec::new(); suggestion_list_state.select(None); // Clear suggestions
                 match key.code {
-                    KeyCode::Char(c) if c.is_digit(10) => sets_input.push(c),
+                    KeyCode::Char(c) if c.is_ascii_digit() => sets_input.push(c),
                     KeyCode::Backspace => { sets_input.pop(); }
                     KeyCode::Up => modify_numeric_input(sets_input, 1i64, Some(1i64), false),
                     KeyCode::Down => modify_numeric_input(sets_input, -1i64, Some(1i64), false),
@@ -919,7 +918,7 @@ pub fn handle_add_workout_modal_input(app: &mut App, key: KeyEvent) -> Result<()
             AddWorkoutField::Reps => {
                  *exercise_suggestions = Vec::new(); suggestion_list_state.select(None);
                  match key.code {
-                     KeyCode::Char(c) if c.is_digit(10) => reps_input.push(c),
+                     KeyCode::Char(c) if c.is_ascii_digit() => reps_input.push(c),
                      KeyCode::Backspace => { reps_input.pop(); }
                      KeyCode::Up => modify_numeric_input(reps_input, 1i64, Some(0i64), false),
                      KeyCode::Down => modify_numeric_input(reps_input, -1i64, Some(0i64), false),
@@ -949,7 +948,7 @@ pub fn handle_add_workout_modal_input(app: &mut App, key: KeyEvent) -> Result<()
             AddWorkoutField::Duration => {
                 *exercise_suggestions = Vec::new(); suggestion_list_state.select(None);
                 match key.code {
-                    KeyCode::Char(c) if c.is_digit(10) => duration_input.push(c),
+                    KeyCode::Char(c) if c.is_ascii_digit() => duration_input.push(c),
                     KeyCode::Backspace => { duration_input.pop(); }
                     KeyCode::Up => modify_numeric_input(duration_input, 1i64, Some(0i64), false),
                     KeyCode::Down => modify_numeric_input(duration_input, -1i64, Some(0i64), false),

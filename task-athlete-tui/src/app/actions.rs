@@ -137,14 +137,8 @@ impl App {
                     KeyCode::Tab => self.bw_focus = BodyweightFocus::Actions,
                     _ => {}
                 },
-                BodyweightFocus::Actions => match key.code {
-                    KeyCode::Tab => self.bw_focus = BodyweightFocus::History,
-                    _ => {}
-                },
-                BodyweightFocus::Graph => match key.code {
-                    KeyCode::Tab => self.bw_focus = BodyweightFocus::Actions,
-                    _ => {}
-                },
+                BodyweightFocus::Actions => if key.code == KeyCode::Tab { self.bw_focus = BodyweightFocus::History },
+                BodyweightFocus::Graph => if key.code == KeyCode::Tab { self.bw_focus = BodyweightFocus::Actions },
             },
         }
         Ok(())
@@ -413,8 +407,7 @@ impl App {
                 *exercise_suggestions = all_exercise_identifiers
                     .iter()
                     .filter(|identifier| identifier.to_lowercase().starts_with(&input_lower))
-                    .cloned()
-                    .take(5) // Limit suggestions to a reasonable number (e.g., 5)
+                    .take(5).cloned() // Limit suggestions to a reasonable number (e.g., 5)
                     .collect();
             }
              // Reset selection when suggestions change

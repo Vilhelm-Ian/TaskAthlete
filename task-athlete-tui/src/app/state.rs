@@ -1,3 +1,4 @@
+//src/app/state.rs
 // task-athlete-tui/src/app/state.rs
 use crate::app::AppInputError; // Use error from parent mod
 use chrono::Utc;
@@ -112,6 +113,28 @@ pub enum ActiveModal {
         focused_field: AddExerciseField,
         error_message: Option<String>,
     },
+    EditWorkout {
+        workout_id: u64,       // ID of the workout being edited
+        exercise_name: String, // Display only, non-editable in this modal
+        sets_input: String,
+        reps_input: String,
+        weight_input: String,
+        duration_input: String,
+        distance_input: String,
+        notes_input: String,
+        focused_field: AddWorkoutField, // Reuse AddWorkoutField for focus, minus Exercise/Suggestions
+        error_message: Option<String>,
+        // Store the definition for context (e.g., bodyweight type)
+        // This is technically redundant if exercise_name is fixed,
+        // but useful for consistency and potential future enhancements.
+        // Store the resolved definition temporarily after user leaves exercise field
+        resolved_exercise: Option<ExerciseDefinition>,
+    },
+    ConfirmDeleteWorkout {
+        workout_id: u64,
+        exercise_name: String,
+        set_index: usize, // For display purposes ("Delete set X of Y?")
+    },
     // Add more here
 }
 
@@ -201,7 +224,11 @@ impl App {
             }
         }
     }
-    pub fn get_last_workout_for_exercise(&self, canonical_name: &str) -> Option<Workout> {
+    pub fn get_last_or_specific_workout(
+        &self,
+        canonical_name: &str,
+        id: Option<u64>,
+    ) -> Option<Workout> {
         let filters = WorkoutFilters {
             exercise_name: Some(canonical_name),
             limit: Some(1), // Get only the most recent one

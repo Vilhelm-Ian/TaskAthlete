@@ -1,4 +1,3 @@
-// task-athlete-tui/src/ui/layout.rs
 use crate::{
     app::{ActiveTab, App}, // Use App from crate::app
     ui::{

@@ -1,7 +1,7 @@
-// task-athlete-tui/src/app/actions.rs
 use super::data::log_change_date;
 use super::modals::{
-    handle_add_workout_modal_input, handle_create_exercise_modal_input,
+    handle_add_workout_modal_input, handle_confirm_delete_modal_input,
+    handle_create_exercise_modal_input, handle_edit_workout_modal_input,
     handle_log_bodyweight_modal_input, handle_set_target_weight_modal_input,
 }; // Use specific modal handlers
 use super::navigation::{
@@ -15,7 +15,7 @@ use super::state::{
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::widgets::ListState;
-use task_athlete_lib::{ExerciseDefinition, ExerciseType, Units, Workout};
+use task_athlete_lib::{ExerciseDefinition, ExerciseType, Units, Workout, WorkoutFilters};
 
 // Make handle_key_event a method on App
 impl App {
@@ -59,8 +59,11 @@ impl App {
             ActiveModal::LogBodyweight { .. } => handle_log_bodyweight_modal_input(self, key)?,
             ActiveModal::SetTargetWeight { .. } => handle_set_target_weight_modal_input(self, key)?,
             ActiveModal::AddWorkout { .. } => handle_add_workout_modal_input(self, key)?,
-            // NEW: Handle CreateExercise modal
             ActiveModal::CreateExercise { .. } => handle_create_exercise_modal_input(self, key)?,
+            ActiveModal::EditWorkout { .. } => handle_edit_workout_modal_input(self, key)?,
+            ActiveModal::ConfirmDeleteWorkout { .. } => {
+                handle_confirm_delete_modal_input(self, key)?
+            }
             _ => {
                 if key.code == KeyCode::Esc {
                     self.active_modal = ActiveModal::None;
@@ -87,8 +90,8 @@ impl App {
                 KeyCode::Char('k') | KeyCode::Up => log_table_previous(self),
                 KeyCode::Char('j') | KeyCode::Down => log_table_next(self),
                 KeyCode::Tab => self.log_focus = LogFocus::ExerciseList,
-                KeyCode::Char('e') | KeyCode::Enter => { /* TODO */ }
-                KeyCode::Char('d') | KeyCode::Delete => { /* TODO */ }
+                KeyCode::Char('e') | KeyCode::Enter => self.open_edit_workout_modal()?, // EDIT
+                KeyCode::Char('d') | KeyCode::Delete => self.open_delete_confirmation_modal()?, // DELETE
                 KeyCode::Char('h') | KeyCode::Left => log_change_date(self, -1),
                 KeyCode::Char('l') | KeyCode::Right => log_change_date(self, 1),
                 _ => {}
@@ -169,7 +172,7 @@ impl App {
                     .resolve_exercise_identifier(selected_exercise_name)
                 {
                     Ok(Some(def)) => {
-                        let last_workout = self.get_last_workout_for_exercise(&def.name);
+                        let last_workout = self.get_last_or_specific_workout(&def.name, None);
                         self.populate_workout_inputs_from_def_and_last_workout(
                             &def,
                             last_workout,
@@ -267,6 +270,134 @@ impl App {
         }
     }
 
+    fn populate_workout_inputs_from_def_and_workout(
+        &self,
+        def: &ExerciseDefinition,
+        workout: &Workout, // The specific workout being edited
+        sets_input: &mut String,
+        reps_input: &mut String,
+        weight_input: &mut String,
+        duration_input: &mut String,
+        distance_input: &mut String,
+        notes_input: &mut String,
+    ) {
+        *sets_input = workout.sets.map_or("1".to_string(), |v| v.to_string());
+        *reps_input = workout.reps.map_or(String::new(), |v| v.to_string());
+        *duration_input = workout
+            .duration_minutes
+            .map_or(String::new(), |v| v.to_string());
+        *notes_input = workout.notes.clone().unwrap_or_default();
+
+        // Weight logic (same as before, but applied to the specific workout's weight)
+        if def.type_ == ExerciseType::BodyWeight {
+            let bodyweight_used = self.service.config.bodyweight.unwrap_or(0.0);
+            let added_weight = workout.weight.map_or(0.0, |w| w - bodyweight_used).max(0.0);
+            *weight_input = if added_weight > 0.0 {
+                format!("{:.1}", added_weight)
+            } else {
+                String::new()
+            };
+        } else {
+            *weight_input = workout
+                .weight
+                .map_or(String::new(), |v| format!("{:.1}", v));
+        }
+
+        // Distance Logic (same as before)
+        if let Some(dist_km) = workout.distance {
+            let display_dist = match self.service.config.units {
+                Units::Metric => dist_km,
+                Units::Imperial => dist_km * 0.621371,
+            };
+            *distance_input = format!("{:.1}", display_dist);
+        } else {
+            *distance_input = String::new();
+        }
+    }
+
+    fn open_edit_workout_modal(&mut self) -> Result<()> {
+        let selected_set_index = match self.log_set_table_state.selected() {
+            Some(i) => i,
+            None => return Ok(()), // No set selected, do nothing
+        };
+
+        let workout_to_edit = match self.log_sets_for_selected_exercise.get(selected_set_index) {
+            Some(w) => w.clone(),  // Clone to avoid borrow issues
+            None => return Ok(()), // Index out of bounds (shouldn't happen)
+        };
+
+        let mut sets_input = "1".to_string();
+        let mut reps_input = String::new();
+        let mut weight_input = String::new();
+        let mut duration_input = String::new();
+        let mut distance_input = String::new();
+        let mut notes_input = String::new();
+        let mut resolved_exercise = None;
+
+        // Get definition and *this specific workout's* data for fields
+        // We pass the workout_id here to potentially load *that* specific workout if needed,
+        // but populate_workout_inputs currently uses the *last* workout for hints.
+        // We will override with the actual data below.
+        match self.get_data_for_workout_modal(
+            &workout_to_edit.exercise_name,
+            Some(workout_to_edit.id as u64),
+        ) {
+            Ok((def, _)) => {
+                // We don't need the last_workout here, we have the specific one
+                // Populate directly from the workout being edited
+                self.populate_workout_inputs_from_def_and_workout(
+                    &def,
+                    &workout_to_edit, // Use the specific workout
+                    &mut sets_input,
+                    &mut reps_input,
+                    &mut weight_input,
+                    &mut duration_input,
+                    &mut distance_input,
+                    &mut notes_input,
+                );
+                resolved_exercise = Some(def.clone());
+            }
+            Err(e) => {
+                self.set_error(format!("Error getting exercise details: {}", e));
+                return Ok(()); // Don't open modal if we can't get details
+            }
+        }
+
+        self.active_modal = ActiveModal::EditWorkout {
+            workout_id: workout_to_edit.id as u64,
+            exercise_name: workout_to_edit.exercise_name.clone(), // Store for display
+            sets_input,
+            reps_input,
+            weight_input,
+            duration_input,
+            distance_input,
+            notes_input,
+            focused_field: AddWorkoutField::Sets, // Start focus on Sets (exercise not editable)
+            error_message: None,
+            resolved_exercise,
+        };
+
+        Ok(())
+    }
+
+    // NEW: Open Delete Confirmation Modal
+    fn open_delete_confirmation_modal(&mut self) -> Result<()> {
+        let selected_index = match self.log_set_table_state.selected() {
+            Some(i) => i,
+            None => return Ok(()), // No set selected
+        };
+
+        if let Some(workout) = self.log_sets_for_selected_exercise.get(selected_index) {
+            self.active_modal = ActiveModal::ConfirmDeleteWorkout {
+                workout_id: workout.id as u64,
+                exercise_name: workout.exercise_name.clone(),
+                set_index: selected_index + 1, // Display 1-based index
+            };
+        }
+
+        Ok(())
+    }
+
     pub fn filter_exercise_suggestions(&mut self) {
         if let ActiveModal::AddWorkout {
              ref exercise_input,
@@ -312,5 +443,36 @@ impl App {
             _ => 1,
         };
         self.update_bw_graph_data(); // Call data update method
+    }
+
+    // Helper specifically for getting the workout being edited
+    pub fn get_workout_by_id(&self, workout_id: &str) -> Option<Workout> {
+        // We could query the service, but if the workout is already loaded in the log tab,
+        // it might be faster to find it there. This assumes the ID is present in the loaded data.
+        // This is potentially fragile if the log data isn't comprehensive.
+        // A safer approach is to always query the service.
+        let filters = WorkoutFilters {
+            exercise_name: Some(workout_id),
+            ..Default::default()
+        };
+        match self.service.list_workouts(filters) {
+            Ok(mut workouts) if !workouts.is_empty() => workouts.pop(),
+            _ => None, // Workout not found or error
+        }
+        // Alternative: Search in existing log_sets_for_selected_exercise
+        // self.log_sets_for_selected_exercise.iter().find(|w| w.id == workout_id).cloned()
+    }
+
+    fn get_data_for_workout_modal(
+        &mut self,
+        exercise_identifier: &str,
+        workout_id_for_context: Option<u64>, // Pass Some(id) when editing
+    ) -> Result<(ExerciseDefinition, Option<Workout>), anyhow::Error> {
+        let def = self
+            .service
+            .resolve_exercise_identifier(exercise_identifier)?
+            .ok_or_else(|| anyhow::anyhow!("Exercise '{}' not found.", exercise_identifier))?;
+        let last_workout = self.get_last_or_specific_workout(&def.name, workout_id_for_context);
+        Ok((def, last_workout))
     }
 }

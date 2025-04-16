@@ -1,4 +1,3 @@
-// task-athlete-tui/src/ui/tabs.rs
 use crate::app::{ActiveTab, App}; // Use App from crate::app
 use ratatui::{
     layout::Rect,

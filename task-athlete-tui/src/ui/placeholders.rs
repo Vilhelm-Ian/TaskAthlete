@@ -1,4 +1,3 @@
-// task-athlete-tui/src/ui/placeholders.rs
 use ratatui::{
     layout::Rect,
     widgets::{Block, Borders, Paragraph, Wrap},

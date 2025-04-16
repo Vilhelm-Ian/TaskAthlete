@@ -1,4 +1,3 @@
-// task-athlete-tui/src/main.rs
 use anyhow::Result;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind},

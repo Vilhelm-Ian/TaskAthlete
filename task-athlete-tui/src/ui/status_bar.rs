@@ -1,3 +1,4 @@
+//src/ui/status_bar.rs
 // task-athlete-tui/src/ui/status_bar.rs
 use crate::app::{state::ActiveModal, AddWorkoutField, App}; // Use App from crate::app
 use ratatui::{
@@ -30,7 +31,9 @@ pub fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
                       "[Esc] Cancel | [Enter] Confirm/Next | [Tab/↑↓] Navigate | [↑↓ Arrow] Inc/Dec Number ".to_string(),
              }
              },
-         ActiveModal::CreateExercise { .. } => " [Esc] Cancel | [Enter] Confirm/Next | [Tab/↑↓/←→] Navigate ".to_string()
+         ActiveModal::CreateExercise { .. } => " [Esc] Cancel | [Enter] Confirm/Next | [Tab/↑↓/←→] Navigate ".to_string(),
+         ActiveModal::EditWorkout { .. } => " [Esc] Cancel | [Enter] Confirm/Next | [Tab/↑↓] Navigate ".to_string(),
+         ActiveModal::ConfirmDeleteWorkout { .. } => " Confirm Deletion: [Y]es / [N]o (Esc) ".to_string(),
      };
 
     let error_text = app.last_error.as_deref().unwrap_or("");
@@ -49,3 +52,4 @@ pub fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
         .alignment(ratatui::layout::Alignment::Right);
     f.render_widget(error_paragraph, status_chunks[1]);
 }
+

@@ -1,4 +1,3 @@
-// task-athlete-tui/src/ui/bodyweight_tab.rs
 use crate::app::{state::BodyweightFocus, App}; // Use App from crate::app
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},

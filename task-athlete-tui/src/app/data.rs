@@ -1,4 +1,3 @@
-// task-athlete-tui/src/app/data.rs
 use super::state::App;
 use chrono::{Datelike, Duration, NaiveDate, TimeZone, Utc};
 use task_athlete_lib::{DbError, Workout, WorkoutFilters};

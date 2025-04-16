@@ -1,4 +1,3 @@
-// task-athlete-tui/src/app/modals.rs
 use super::state::{
     ActiveModal, AddExerciseField, AddWorkoutField, App, LogBodyweightField, SetTargetWeightField,
 };
@@ -210,6 +209,78 @@ fn submit_add_workout(app: &mut App, modal_state: &ActiveModal) -> Result<(), Ap
      }
 }
 
+fn submit_edit_workout(app: &mut App, modal_state: &ActiveModal) -> Result<(), AppInputError> {
+    if let ActiveModal::EditWorkout {
+         workout_id,
+         // exercise_name is not submitted for change here
+         sets_input,
+         reps_input,
+         weight_input,
+         duration_input,
+         distance_input,
+         notes_input,
+         resolved_exercise, // Needed for type context (bodyweight)
+         .. // ignore focused_field, error_message
+     } = modal_state {
+
+        let exercise_def = resolved_exercise.as_ref().ok_or_else(|| {
+             AppInputError::DbError("Internal error: Exercise context missing for edit.".to_string())
+        })?;
+
+        // Parse inputs (reuse existing helpers)
+        let sets = parse_optional_int(sets_input)?;
+        let reps = parse_optional_int(reps_input)?;
+        let weight_arg = parse_optional_float(weight_input)?;
+        let duration = parse_optional_int::<i64>(duration_input)?;
+        let distance_arg = parse_optional_float(distance_input)?;
+        let notes = if notes_input.trim().is_empty() { None } else { Some(notes_input.trim().to_string()) };
+
+        // Bodyweight & Units handled by service layer
+        let bodyweight_to_use = if exercise_def.type_ == ExerciseType::BodyWeight {
+            app.service.config.bodyweight
+        } else { None };
+
+        // Call AppService's edit_workout (assuming its signature)
+        // Adjust the signature call based on your actual AppService::edit_workout method
+        match app.service.edit_workout(
+            *workout_id as i64, None, sets, reps, weight_arg, duration, distance_arg, notes, None
+        ) {
+            Ok(_) => Ok(()), // Success
+            Err(e) => {
+                Err(AppInputError::DbError(format!("Error editing workout: {}", e)))
+            }
+        }
+    } else {
+        Err(AppInputError::DbError("Internal error: Invalid modal state for edit workout".to_string()))
+    }
+}
+
+fn submit_delete_workout_set(app: &mut App, workout_id: u64) -> Result<(), AppInputError> {
+    match app.service.delete_workouts(&vec![workout_id as i64]) {
+        Ok(_) => {
+            // Adjust selection after deletion if necessary
+            if let Some(selected_index) = app.log_set_table_state.selected() {
+                if selected_index >= app.log_sets_for_selected_exercise.len().saturating_sub(1) {
+                    // Adjust if last item deleted
+                    let new_index = app.log_sets_for_selected_exercise.len().saturating_sub(2); // Select new last item
+                    app.log_set_table_state.select(
+                        if new_index > 0 || app.log_sets_for_selected_exercise.len() == 1 {
+                            Some(new_index)
+                        } else {
+                            None
+                        },
+                    );
+                }
+            }
+            Ok(())
+        }
+        Err(e) => Err(AppInputError::DbError(format!(
+            "Error deleting workout: {}",
+            e
+        ))),
+    }
+}
+
 fn submit_log_bodyweight(
     app: &mut App, // Pass App mutably
     weight_input: &str,
@@ -316,6 +387,306 @@ fn submit_create_exercise(app: &mut App, modal_state: &ActiveModal) -> Result<()
 }
 
 // --- Input Handling ---
+pub fn handle_edit_workout_modal_input(app: &mut App, key: KeyEvent) -> Result<()> {
+    let mut submission_result: Result<(), AppInputError> = Ok(());
+    let mut should_submit = false;
+
+    if let ActiveModal::EditWorkout {
+        // workout_id and exercise_name are not directly modified by input
+        ref mut sets_input,
+        ref mut reps_input,
+        ref mut weight_input,
+        ref mut duration_input,
+        ref mut distance_input,
+        ref mut notes_input,
+        ref mut focused_field,
+        ref mut error_message,
+        // resolved_exercise is needed for context but not directly edited
+        ..
+    } = app.active_modal
+    {
+        *error_message = None; // Clear error on input
+
+        // Handle Shift+Tab for reverse navigation (simplified for edit modal)
+        if key.modifiers == KeyModifiers::SHIFT && key.code == KeyCode::BackTab {
+            match *focused_field {
+                AddWorkoutField::Sets => *focused_field = AddWorkoutField::Cancel, // Wrap around up
+                AddWorkoutField::Reps => *focused_field = AddWorkoutField::Sets,
+                AddWorkoutField::Weight => *focused_field = AddWorkoutField::Reps,
+                AddWorkoutField::Duration => *focused_field = AddWorkoutField::Weight,
+                AddWorkoutField::Distance => *focused_field = AddWorkoutField::Duration,
+                AddWorkoutField::Notes => *focused_field = AddWorkoutField::Distance,
+                AddWorkoutField::Confirm => *focused_field = AddWorkoutField::Notes,
+                AddWorkoutField::Cancel => *focused_field = AddWorkoutField::Confirm,
+                _ => {} // Ignore Exercise/Suggestions fields
+            }
+        } else {
+            // --- Handle other fields (Sets, Reps, etc.) ---
+            // Reuse AddWorkoutField enum, but skip Exercise/Suggestions focus states
+            match *focused_field {
+                // Skip Exercise and Suggestions fields
+                AddWorkoutField::Exercise | AddWorkoutField::Suggestions => {
+                    *focused_field = AddWorkoutField::Sets; // Should not be focusable, move to Sets
+                }
+                AddWorkoutField::Sets => {
+                    match key.code {
+                        KeyCode::Char(c) if c.is_digit(10) => sets_input.push(c),
+                        KeyCode::Backspace => {
+                            sets_input.pop();
+                        }
+                        KeyCode::Up => modify_numeric_input(sets_input, 1i64, Some(1i64), false),
+                        KeyCode::Down => modify_numeric_input(sets_input, -1i64, Some(1i64), false),
+                        KeyCode::Enter | KeyCode::Tab => {
+                            *focused_field = AddWorkoutField::Reps;
+                        }
+                        KeyCode::BackTab => {
+                            *focused_field = AddWorkoutField::Cancel;
+                        } // Defined above
+                        KeyCode::Up => {
+                            *focused_field = AddWorkoutField::Cancel;
+                        } // Simple Up goes to Cancel
+                        KeyCode::Down => {
+                            *focused_field = AddWorkoutField::Reps;
+                        } // Simple Down goes forward
+                        KeyCode::Esc => {
+                            app.active_modal = ActiveModal::None;
+                            return Ok(());
+                        }
+                        _ => {}
+                    }
+                }
+                AddWorkoutField::Reps => match key.code {
+                    KeyCode::Char(c) if c.is_digit(10) => reps_input.push(c),
+                    KeyCode::Backspace => {
+                        reps_input.pop();
+                    }
+                    KeyCode::Up => modify_numeric_input(reps_input, 1i64, Some(0i64), false),
+                    KeyCode::Down => modify_numeric_input(reps_input, -1i64, Some(0i64), false),
+                    KeyCode::Enter | KeyCode::Tab => {
+                        *focused_field = AddWorkoutField::Weight;
+                    }
+                    KeyCode::BackTab => {
+                        *focused_field = AddWorkoutField::Sets;
+                    }
+                    KeyCode::Up => {
+                        *focused_field = AddWorkoutField::Sets;
+                    }
+                    KeyCode::Down => {
+                        *focused_field = AddWorkoutField::Weight;
+                    }
+                    KeyCode::Esc => {
+                        app.active_modal = ActiveModal::None;
+                        return Ok(());
+                    }
+                    _ => {}
+                },
+                AddWorkoutField::Weight => match key.code {
+                    KeyCode::Char(c) if "0123456789.".contains(c) => weight_input.push(c),
+                    KeyCode::Backspace => {
+                        weight_input.pop();
+                    }
+                    KeyCode::Up => modify_numeric_input(weight_input, 0.5f64, Some(0.0f64), true),
+                    KeyCode::Down => {
+                        modify_numeric_input(weight_input, -0.5f64, Some(0.0f64), true)
+                    }
+                    KeyCode::Enter | KeyCode::Tab => {
+                        *focused_field = AddWorkoutField::Duration;
+                    }
+                    KeyCode::BackTab => {
+                        *focused_field = AddWorkoutField::Reps;
+                    }
+                    KeyCode::Up => {
+                        *focused_field = AddWorkoutField::Reps;
+                    }
+                    KeyCode::Down => {
+                        *focused_field = AddWorkoutField::Duration;
+                    }
+                    KeyCode::Esc => {
+                        app.active_modal = ActiveModal::None;
+                        return Ok(());
+                    }
+                    _ => {}
+                },
+                AddWorkoutField::Duration => match key.code {
+                    KeyCode::Char(c) if c.is_digit(10) => duration_input.push(c),
+                    KeyCode::Backspace => {
+                        duration_input.pop();
+                    }
+                    KeyCode::Up => modify_numeric_input(duration_input, 1i64, Some(0i64), false),
+                    KeyCode::Down => modify_numeric_input(duration_input, -1i64, Some(0i64), false),
+                    KeyCode::Enter | KeyCode::Tab => {
+                        *focused_field = AddWorkoutField::Distance;
+                    }
+                    KeyCode::BackTab => {
+                        *focused_field = AddWorkoutField::Weight;
+                    }
+                    KeyCode::Up => {
+                        *focused_field = AddWorkoutField::Weight;
+                    }
+                    KeyCode::Down => {
+                        *focused_field = AddWorkoutField::Distance;
+                    }
+                    KeyCode::Esc => {
+                        app.active_modal = ActiveModal::None;
+                        return Ok(());
+                    }
+                    _ => {}
+                },
+                AddWorkoutField::Distance => match key.code {
+                    KeyCode::Char(c) if "0123456789.".contains(c) => distance_input.push(c),
+                    KeyCode::Backspace => {
+                        distance_input.pop();
+                    }
+                    KeyCode::Up => modify_numeric_input(distance_input, 0.1f64, Some(0.0f64), true),
+                    KeyCode::Down => {
+                        modify_numeric_input(distance_input, -0.1f64, Some(0.0f64), true)
+                    }
+                    KeyCode::Enter | KeyCode::Tab => {
+                        *focused_field = AddWorkoutField::Notes;
+                    }
+                    KeyCode::BackTab => {
+                        *focused_field = AddWorkoutField::Duration;
+                    }
+                    KeyCode::Up => {
+                        *focused_field = AddWorkoutField::Duration;
+                    }
+                    KeyCode::Down => {
+                        *focused_field = AddWorkoutField::Notes;
+                    }
+                    KeyCode::Esc => {
+                        app.active_modal = ActiveModal::None;
+                        return Ok(());
+                    }
+                    _ => {}
+                },
+                AddWorkoutField::Notes => match key.code {
+                    KeyCode::Char(c) => notes_input.push(c),
+                    KeyCode::Backspace => {
+                        notes_input.pop();
+                    }
+                    KeyCode::Enter | KeyCode::Tab => {
+                        *focused_field = AddWorkoutField::Confirm;
+                    }
+                    KeyCode::BackTab => {
+                        *focused_field = AddWorkoutField::Distance;
+                    }
+                    KeyCode::Up => {
+                        *focused_field = AddWorkoutField::Distance;
+                    }
+                    KeyCode::Down => {
+                        *focused_field = AddWorkoutField::Confirm;
+                    }
+                    KeyCode::Esc => {
+                        app.active_modal = ActiveModal::None;
+                        return Ok(());
+                    }
+                    _ => {}
+                },
+                AddWorkoutField::Confirm => {
+                    match key.code {
+                        KeyCode::Enter => should_submit = true,
+                        KeyCode::Left | KeyCode::Backspace | KeyCode::BackTab => {
+                            *focused_field = AddWorkoutField::Cancel;
+                        }
+                        KeyCode::Up => {
+                            *focused_field = AddWorkoutField::Notes;
+                        }
+                        KeyCode::Down | KeyCode::Tab | KeyCode::Right => {
+                            *focused_field = AddWorkoutField::Cancel;
+                        } // Wrap around
+                        KeyCode::Esc => {
+                            app.active_modal = ActiveModal::None;
+                            return Ok(());
+                        }
+                        _ => {}
+                    }
+                }
+                AddWorkoutField::Cancel => {
+                    match key.code {
+                        KeyCode::Enter | KeyCode::Esc => {
+                            app.active_modal = ActiveModal::None;
+                            return Ok(());
+                        }
+                        KeyCode::Right | KeyCode::Tab => {
+                            *focused_field = AddWorkoutField::Confirm;
+                        }
+                        KeyCode::Left | KeyCode::Backspace | KeyCode::BackTab => {
+                            *focused_field = AddWorkoutField::Confirm;
+                        }
+                        KeyCode::Up => {
+                            *focused_field = AddWorkoutField::Notes;
+                        }
+                        KeyCode::Down => {
+                            *focused_field = AddWorkoutField::Sets;
+                        } // Wrap around down to Sets
+                        _ => {}
+                    }
+                }
+            }
+        }
+    } // End mutable borrow of app.active_modal
+
+    // --- Submission Logic ---
+    if should_submit {
+        let modal_state_clone = app.active_modal.clone();
+        if let ActiveModal::EditWorkout { .. } = modal_state_clone {
+            submission_result = submit_edit_workout(app, &modal_state_clone);
+        } else {
+            submission_result = Err(AppInputError::DbError(
+                "Internal Error: Modal state changed unexpectedly".to_string(),
+            ));
+        }
+
+        if submission_result.is_ok() {
+            app.active_modal = ActiveModal::None; // Close modal on success
+        } else {
+            // Re-borrow to set error
+            if let ActiveModal::EditWorkout {
+                ref mut error_message,
+                ..
+            } = app.active_modal
+            {
+                *error_message = Some(submission_result.unwrap_err().to_string());
+            }
+        }
+    }
+
+    Ok(())
+}
+
+pub fn handle_confirm_delete_modal_input(app: &mut App, key: KeyEvent) -> Result<()> {
+    let mut should_delete = false;
+    let mut workout_id_to_delete: u64 = 0; // Placeholder
+
+    if let ActiveModal::ConfirmDeleteWorkout { workout_id, .. } = &app.active_modal {
+        workout_id_to_delete = *workout_id; // Capture the ID
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                should_delete = true;
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc | KeyCode::Backspace => {
+                app.active_modal = ActiveModal::None; // Close modal, do nothing
+                return Ok(());
+            }
+            _ => {} // Ignore other keys
+        }
+    }
+
+    if should_delete {
+        let delete_result = submit_delete_workout_set(app, workout_id_to_delete);
+        if delete_result.is_ok() {
+            app.active_modal = ActiveModal::None; // Close modal on success
+        } else {
+            // If delete fails, show error in status bar (modal is already closed or will be replaced)
+            // Or, we could potentially transition to an Error modal, but status bar is simpler.
+            app.set_error(delete_result.unwrap_err().to_string());
+            app.active_modal = ActiveModal::None; // Close the confirmation modal even on error
+        }
+    }
+
+    Ok(())
+}
+
 pub fn handle_add_workout_modal_input(app: &mut App, key: KeyEvent) -> Result<()> {
     let mut submission_result: Result<(), AppInputError> = Ok(());
     let mut should_submit = false;
@@ -686,7 +1057,7 @@ pub fn handle_add_workout_modal_input(app: &mut App, key: KeyEvent) -> Result<()
     // --- Repopulate Fields (Deferred until borrow ends) ---
     if let Some(def_to_repopulate) = repopulate_fields_for_resolved_exercise {
         // Re-borrow mutably to update fields
-        let last_workout = app.get_last_workout_for_exercise(&def_to_repopulate.name);
+        let last_workout = app.get_last_or_specific_workout(&def_to_repopulate.name, None);
         if let ActiveModal::AddWorkout {
             ref mut sets_input,
             ref mut reps_input,

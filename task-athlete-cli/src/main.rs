@@ -518,6 +518,10 @@ fn main() -> Result<()> {
                 Err(e) => bail!("Error setting target bodyweight: {}", e),
             }
         }
+        cli::Commands::DeleteBodyweight { id } => match service.delete_bodyweight(id) {
+            Ok(_) => println!("Successfully deleted body weight entry {id}"),
+            Err(e) => bail!("Error deleting body wight entry: {}", e),
+        },
         cli::Commands::ClearTargetWeight => match service.set_target_bodyweight(None) {
             Ok(()) => println!("Target bodyweight cleared. Config updated."),
             Err(e) => bail!("Error clearing target bodyweight: {}", e),
@@ -776,7 +780,7 @@ fn prompt_and_set_pb_notification_cli(service: &mut AppService) -> Result<bool, 
 // --- Table Printing Functions (Remain in CLI) ---
 
 /// Prints logged bodyweights in a table
-fn print_bodyweight_table(entries: Vec<(DateTime<Utc>, f64)>, units: Units) {
+fn print_bodyweight_table(entries: Vec<(usize, DateTime<Utc>, f64)>, units: Units) {
     let mut table = Table::new();
     let header_color = task_athlete_lib::parse_color("Blue")
         .map(Color::from)
@@ -794,8 +798,9 @@ fn print_bodyweight_table(entries: Vec<(DateTime<Utc>, f64)>, units: Units) {
             Cell::new(format!("Weight ({})", weight_unit_str)).fg(header_color),
         ]);
 
-    for (timestamp, weight) in entries {
+    for (id, timestamp, weight) in entries {
         table.add_row(vec![
+            Cell::new(id.to_string()),
             Cell::new(timestamp.format("%Y-%m-%d %H:%M").to_string()),
             Cell::new(format!("{:.2}", weight)),
         ]);
@@ -803,7 +808,7 @@ fn print_bodyweight_table(entries: Vec<(DateTime<Utc>, f64)>, units: Units) {
     println!("{table}");
 }
 
-fn print_bodyweight_csv(entries: Vec<(DateTime<Utc>, f64)>, units: Units) -> Result<()> {
+fn print_bodyweight_csv(entries: Vec<(usize, DateTime<Utc>, f64)>, units: Units) -> Result<()> {
     let mut writer = csv::Writer::from_writer(io::stdout());
     let weight_unit_str = match units {
         Units::Metric => "kg",
@@ -813,8 +818,12 @@ fn print_bodyweight_csv(entries: Vec<(DateTime<Utc>, f64)>, units: Units) -> Res
     // Write header
     writer.write_record(&["Timestamp_UTC", &format!("Weight_{}", weight_unit_str)])?;
 
-    for (timestamp, weight) in entries {
-        writer.write_record(&[timestamp.to_rfc3339(), format!("{:.2}", weight)])?;
+    for (id, timestamp, weight) in entries {
+        writer.write_record(&[
+            id.to_string(),
+            timestamp.to_rfc3339(),
+            format!("{:.2}", weight),
+        ])?;
     }
     writer.flush()?;
     Ok(())

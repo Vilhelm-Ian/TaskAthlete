@@ -33,7 +33,7 @@ pub fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
              },
          ActiveModal::CreateExercise { .. } => " [Esc] Cancel | [Enter] Confirm/Next | [Tab/↑↓/←→] Navigate ".to_string(),
          ActiveModal::EditWorkout { .. } => " [Esc] Cancel | [Enter] Confirm/Next | [Tab/↑↓] Navigate ".to_string(),
-         ActiveModal::ConfirmDeleteWorkout { .. } => " Confirm Deletion: [Y]es / [N]o (Esc) ".to_string(),
+         ActiveModal::ConfirmDeleteWorkout {..} | ActiveModal::ConfirmDeleteBodyWeight  { .. } => " Confirm Deletion: [Y]es / [N]o (Esc) ".to_string(),
      };
 
     let error_text = app.last_error.as_deref().unwrap_or("");
@@ -52,4 +52,3 @@ pub fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
         .alignment(ratatui::layout::Alignment::Right);
     f.render_widget(error_paragraph, status_chunks[1]);
 }
-

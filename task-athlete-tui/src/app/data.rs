@@ -1,6 +1,7 @@
 use super::state::App;
+use anyhow::{anyhow, Result};
 use chrono::{Datelike, Duration, NaiveDate, Utc};
-use task_athlete_lib::{DbError, Workout, WorkoutFilters};
+use task_athlete_lib::{AppService, DbError, Workout, WorkoutFilters};
 
 // Make refresh logic methods on App
 impl App {
@@ -116,7 +117,7 @@ impl App {
                     self.bw_history_state.select(Some(0));
                 }
 
-                self.bw_latest = self.bw_history.first().map(|(_, w)| *w);
+                self.bw_latest = self.bw_history.first().map(|(_, _, w)| *w);
                 self.bw_target = self.service.get_target_bodyweight(); // Refresh target
 
                 self.update_bw_graph_data();
@@ -152,14 +153,14 @@ impl App {
         } else {
             self.bw_history
                 .last()
-                .map(|(ts, _)| ts.date_naive())
+                .map(|(_, ts, _)| ts.date_naive())
                 .unwrap_or(now_naive)
         };
 
         let filtered_data: Vec<_> = self
             .bw_history
             .iter()
-            .filter(|(ts, _)| ts.date_naive() >= start_date_filter)
+            .filter(|(_, ts, _)| ts.date_naive() >= start_date_filter)
             .rev()
             .collect();
 
@@ -170,12 +171,12 @@ impl App {
         let first_day_epoch = filtered_data
             .first()
             .unwrap()
-            .0
+            .1
             .date_naive()
             .num_days_from_ce();
         self.bw_graph_data = filtered_data
             .iter()
-            .map(|(date, weight)| {
+            .map(|(_, date, weight)| {
                 let days_since_first = (date.num_days_from_ce() - first_day_epoch) as f64;
                 (days_since_first, *weight)
             })
@@ -225,4 +226,52 @@ pub fn log_change_date(app: &mut App, days: i64) {
             });
         // Data will be refreshed by the main loop
     }
+}
+
+pub fn log_set_previous_exercised_date(app: &mut App) -> Result<()> {
+    let exercised_dates = app.service.get_all_dates_with_exercise()?;
+    let current_date = app.log_viewed_date;
+    for date in exercised_dates.into_iter().rev() {
+        if date < current_date {
+            app.log_viewed_date = date;
+            app.log_exercise_list_state
+                .select(if app.log_exercises_today.is_empty() {
+                    None
+                } else {
+                    Some(0)
+                });
+            app.log_set_table_state
+                .select(if app.log_sets_for_selected_exercise.is_empty() {
+                    None
+                } else {
+                    Some(0)
+                });
+            break;
+        }
+    }
+    Ok(())
+}
+
+pub fn log_set_next_exercised_date(app: &mut App) -> Result<()> {
+    let exercised_dates = app.service.get_all_dates_with_exercise()?;
+    let current_date = app.log_viewed_date;
+    for date in exercised_dates {
+        if date > current_date {
+            app.log_viewed_date = date;
+            app.log_exercise_list_state
+                .select(if app.log_exercises_today.is_empty() {
+                    None
+                } else {
+                    Some(0)
+                });
+            app.log_set_table_state
+                .select(if app.log_sets_for_selected_exercise.is_empty() {
+                    None
+                } else {
+                    Some(0)
+                });
+            break;
+        }
+    }
+    Ok(())
 }

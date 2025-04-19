@@ -244,6 +244,10 @@ pub enum Commands {
     SetTargetWeight {
         weight: f64,
     },
+    /// Delete a bodyweight entry
+    DeleteBodyweight {
+        id: i64,
+    },
     /// Clear your target bodyweight from the config file
     ClearTargetWeight,
     /// Show the path to the database file

@@ -1,20 +1,20 @@
 // src/app/input.rs
 use super::{
-    actions::{
-        bw_cycle_graph_range, open_add_workout_modal, open_create_exercise_modal,
-        open_delete_confirmation_modal, open_edit_workout_modal,
-    },
-    data::log_change_date,
+    data::{log_change_date, log_set_next_exercised_date, log_set_previous_exercised_date},
     modals::{
-        handle_add_workout_modal_input, handle_confirm_delete_modal_input,
-        handle_create_exercise_modal_input, handle_edit_workout_modal_input,
-        handle_log_bodyweight_modal_input, handle_set_target_weight_modal_input,
+        handle_add_workout_modal_input, handle_confirm_delete_body_weigth_input,
+        handle_confirm_delete_modal_input, handle_create_exercise_modal_input,
+        handle_edit_workout_modal_input, handle_log_bodyweight_modal_input,
+        handle_set_target_weight_modal_input,
     },
     navigation::{
         bw_table_next, bw_table_previous, log_list_next, log_list_previous, log_table_next,
         log_table_previous,
     },
-    state::{ActiveModal, ActiveTab, App, BodyweightFocus, LogFocus},
+    state::{
+        ActiveModal, ActiveTab, App, BodyweightFocus, LogBodyweightField, LogFocus,
+        SetTargetWeightField,
+    },
 };
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent};
@@ -24,7 +24,7 @@ impl App {
     pub fn handle_key_event(&mut self, key: KeyEvent) -> Result<()> {
         // Handle based on active modal first
         if self.active_modal != ActiveModal::None {
-            return self.handle_modal_input(key);
+            return self.handle_modal_input(key); // Call modal handler method
         }
 
         // Global keys
@@ -48,20 +48,28 @@ impl App {
         Ok(())
     }
 
-    // --- Modal Input Handling ---
     fn handle_modal_input(&mut self, key: KeyEvent) -> Result<()> {
         match self.active_modal {
-            ActiveModal::Help => Self::handle_help_modal_input(self, key),
+            ActiveModal::Help => {
+                match key.code {
+                    KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter | KeyCode::Char('?') => {
+                        self.active_modal = ActiveModal::None;
+                    }
+                    _ => {} // Ignore other keys in help
+                }
+            }
             ActiveModal::LogBodyweight { .. } => handle_log_bodyweight_modal_input(self, key)?,
             ActiveModal::SetTargetWeight { .. } => handle_set_target_weight_modal_input(self, key)?,
             ActiveModal::AddWorkout { .. } => handle_add_workout_modal_input(self, key)?,
             ActiveModal::CreateExercise { .. } => handle_create_exercise_modal_input(self, key)?,
             ActiveModal::EditWorkout { .. } => handle_edit_workout_modal_input(self, key)?,
             ActiveModal::ConfirmDeleteWorkout { .. } => {
-                handle_confirm_delete_modal_input(self, key)?
+                handle_confirm_delete_modal_input(self, key)?;
+            }
+            ActiveModal::ConfirmDeleteBodyWeight { .. } => {
+                handle_confirm_delete_body_weigth_input(self, key);
             }
             _ => {
-                // Generic fallback for other modals if added later
                 if key.code == KeyCode::Esc {
                     self.active_modal = ActiveModal::None;
                 }
@@ -70,35 +78,29 @@ impl App {
         Ok(())
     }
 
-    fn handle_help_modal_input(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter | KeyCode::Char('?') => {
-                self.active_modal = ActiveModal::None;
-            }
-            _ => {} // Ignore other keys in help
-        }
-    }
-
-    // --- Tab-Specific Input Handling ---
     fn handle_log_input(&mut self, key: KeyEvent) -> Result<()> {
         match self.log_focus {
             LogFocus::ExerciseList => match key.code {
                 KeyCode::Char('k') | KeyCode::Up => log_list_previous(self),
-               KeyCode::Char('j') | KeyCode::Down => log_list_next(self),
-               KeyCode::Tab => self.log_focus = LogFocus::SetList,
-         ,       KeyCode::Char('a') => open_add_workout_modal(self)?,
-                KeyCode::Char('c') => open_create_exercise_modal(self)?,
-                KeyCode::Char('g') => { /* TODO: Go to Graphs */ }
+                KeyCode::Char('j') | KeyCode::Down => log_list_next(self),
+                KeyCode::Tab => self.log_focus = LogFocus::SetList,
+                KeyCode::Char('a') => self.open_add_workout_modal()?,
+                KeyCode::Char('c') => self.open_create_exercise_modal()?, // NEW: Open create modal
+                KeyCode::Char('g') => { /* TODO */ }
                 KeyCode::Char('h') | KeyCode::Left => log_change_date(self, -1),
                 KeyCode::Char('l') | KeyCode::Right => log_change_date(self, 1),
+                KeyCode::Char('H') => log_set_previous_exercised_date(self)?,
+                KeyCode::Char('L') => log_set_next_exercised_date(self)?,
                 _ => {}
             },
             LogFocus::SetList => match key.code {
                 KeyCode::Char('k') | KeyCode::Up => log_table_previous(self),
                 KeyCode::Char('j') | KeyCode::Down => log_table_next(self),
                 KeyCode::Tab => self.log_focus = LogFocus::ExerciseList,
-                KeyCode::Char('e') | KeyCode::Enter => open_edit_workout_modal(self)?,
-                KeyCode::Char('d') | KeyCode::Delete => open_delete_confirmation_modal(self)?,
+                KeyCode::Char('e') | KeyCode::Enter => self.open_edit_workout_modal()?, // EDIT
+                KeyCode::Char('d') | KeyCode::Delete => {
+                    self.open_delete_confirmation_modal();
+                } // DELETE
                 KeyCode::Char('h') | KeyCode::Left => log_change_date(self, -1),
                 KeyCode::Char('l') | KeyCode::Right => log_change_date(self, 1),
                 _ => {}
@@ -108,25 +110,56 @@ impl App {
     }
 
     fn handle_history_input(&mut self, _key: KeyEvent) -> Result<()> {
-        // TODO: History tab input
+        // TODO
         Ok(())
     }
 
     fn handle_graphs_input(&mut self, _key: KeyEvent) -> Result<()> {
-        // TODO: Graphs tab input
+        // TODO
         Ok(())
     }
 
     fn handle_bodyweight_input(&mut self, key: KeyEvent) -> Result<()> {
         match key.code {
-            KeyCode::Char('l') => self.open_log_bodyweight_modal(),
-            KeyCode::Char('t') => self.open_set_target_weight_modal(),
-            KeyCode::Char('r') => bw_cycle_graph_range(self),
-            // Basic navigation for now, Tab focus cycle not implemented
-            KeyCode::Char('k') | KeyCode::Up => bw_table_previous(self),
-            KeyCode::Char('j') | KeyCode::Down => bw_table_next(self),
-            //KeyCode::Tab => // TODO: Implement focus switching if needed
-            _ => {}
+            KeyCode::Char('l') => {
+                self.active_modal = ActiveModal::LogBodyweight {
+                    weight_input: String::new(),
+                    date_input: "today".to_string(),
+                    focused_field: LogBodyweightField::Weight,
+                    error_message: None,
+                };
+            }
+            KeyCode::Char('t') => {
+                self.active_modal = ActiveModal::SetTargetWeight {
+                    weight_input: self
+                        .bw_target
+                        .map_or(String::new(), |w| format!("{:.1}", w)),
+                    focused_field: SetTargetWeightField::Weight,
+                    error_message: None,
+                };
+            }
+            KeyCode::Char('r') => self.bw_cycle_graph_range(), // Keep cycle logic here for now
+            _ => match self.bw_focus {
+                BodyweightFocus::History => match key.code {
+                    KeyCode::Char('k') | KeyCode::Up => bw_table_previous(self),
+                    KeyCode::Char('j') | KeyCode::Down => bw_table_next(self),
+                    KeyCode::Char('d') => {
+                        self.open_delete_bodyweight_confirmation_modal();
+                    }
+                    KeyCode::Tab => self.bw_focus = BodyweightFocus::Actions,
+                    _ => {}
+                },
+                BodyweightFocus::Actions => {
+                    if key.code == KeyCode::Tab {
+                        self.bw_focus = BodyweightFocus::History
+                    }
+                }
+                BodyweightFocus::Graph => {
+                    if key.code == KeyCode::Tab {
+                        self.bw_focus = BodyweightFocus::Actions
+                    }
+                }
+            },
         }
         Ok(())
     }

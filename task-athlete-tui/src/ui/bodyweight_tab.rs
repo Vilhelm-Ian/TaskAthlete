@@ -148,7 +148,7 @@ fn render_bodyweight_status(f: &mut Frame, app: &App, area: Rect) {
         Units::Imperial => "lbs",
     };
     let (latest_weight_str, latest_date_str) = match app.bw_history.first() {
-        Some((date, w)) => {
+        Some((_, date, w)) => {
             let display_w = match app.service.config.units {
                 Units::Metric => *w,
                 Units::Imperial => *w * 2.20462,
@@ -235,7 +235,7 @@ fn render_bodyweight_history(f: &mut Frame, app: &mut App, area: Rect) {
         .map(|h| Cell::from(h).style(Style::default().fg(Color::LightBlue)));
     let header = Row::new(header_cells).height(1).bottom_margin(1);
 
-    let rows = app.bw_history.iter().map(|(date, weight_kg)| {
+    let rows = app.bw_history.iter().map(|(_, date, weight_kg)| {
         let display_weight = match app.service.config.units {
             Units::Metric => *weight_kg,
             Units::Imperial => *weight_kg * 2.20462,

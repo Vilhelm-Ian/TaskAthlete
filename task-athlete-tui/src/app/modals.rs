@@ -19,7 +19,7 @@ fn parse_optional_int<T: FromStr>(input: &str) -> Result<Option<T>, AppInputErro
             .parse::<T>()
             .map(Some)
             .map_err(|_| {
-                AppInputError::InvalidNumber(format!("'{}' is not a valid integer", trimmed))
+                AppInputError::InvalidNumber(format!("'{trimmed}' is not a valid integer"))
             })
             .inspect(|opt_val| {
                 // Basic validation (can be extended)
@@ -40,9 +40,7 @@ fn parse_optional_float(input: &str) -> Result<Option<f64>, AppInputError> {
         trimmed
             .parse::<f64>()
             .map(Some)
-            .map_err(|_| {
-                AppInputError::InvalidNumber(format!("'{}' is not a valid number", trimmed))
-            })
+            .map_err(|_| AppInputError::InvalidNumber(format!("'{trimmed}' is not a valid number")))
             .and_then(|opt_val| {
                 if let Some(val) = opt_val {
                     if val < 0.0 {
@@ -246,7 +244,7 @@ fn submit_edit_workout(app: &mut App, modal_state: &ActiveModal) -> Result<(), A
         ) {
             Ok(_) => Ok(()), // Success
             Err(e) => {
-                Err(AppInputError::DbError(format!("Error editing workout: {}", e)))
+                Err(AppInputError::DbError(format!("Error editing workout: {e }")))
             }
         }
     } else {
@@ -314,10 +312,9 @@ fn submit_log_bodyweight(
 fn submit_set_target_weight(app: &mut App, weight_input: &str) -> Result<(), AppInputError> {
     let weight = parse_modal_weight(weight_input)?;
     match app.service.set_target_bodyweight(Some(weight)) {
-        Ok(_) => Ok(()),
+        Ok(()) => Ok(()),
         Err(e) => Err(AppInputError::DbError(format!(
-            "Error setting target: {}", // ConfigError usually doesn't need DbError type
-            e
+            "Error setting target: {e}" // ConfigError usually doesn't need DbError type
         ))),
     }
 }
@@ -326,13 +323,12 @@ fn submit_clear_target_weight(app: &mut App) -> Result<(), AppInputError> {
     match app.service.set_target_bodyweight(None) {
         Ok(_) => Ok(()),
         Err(e) => Err(AppInputError::DbError(format!(
-            "Error clearing target: {}",
-            e
+            "Error clearing target: {e}"
         ))),
     }
 }
 
-fn submit_create_exercise(app: &mut App, modal_state: &ActiveModal) -> Result<(), AppInputError> {
+fn submit_create_exercise(app: &App, modal_state: &ActiveModal) -> Result<(), AppInputError> {
     if let ActiveModal::CreateExercise {
         name_input,
         muscles_input,
@@ -1322,6 +1318,49 @@ pub fn handle_set_target_weight_modal_input(app: &mut App, key: KeyEvent) -> Res
     }
 
     Ok(())
+}
+
+pub fn handle_confirm_delete_body_weigth_input(app: &mut App, key: KeyEvent) -> Result<()> {
+    let mut should_delete = false;
+    let mut bodyweight_id_to_delete: u64 = 0; // Placeholder
+
+    if let ActiveModal::ConfirmDeleteBodyWeight { body_weight_id, .. } = &app.active_modal {
+        bodyweight_id_to_delete = *body_weight_id; // Capture the ID
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                should_delete = true;
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc | KeyCode::Backspace => {
+                app.active_modal = ActiveModal::None; // Close modal, do nothing
+                return Ok(());
+            }
+            _ => {} // Ignore other keys
+        }
+    }
+
+    if should_delete {
+        let delete_result = sumbit_delete_body_weight(app, bodyweight_id_to_delete);
+        if delete_result.is_ok() {
+            app.active_modal = ActiveModal::None; // Close modal on success
+        } else {
+            // If delete fails, show error in status bar (modal is already closed or will be replaced)
+            // Or, we could potentially transition to an Error modal, but status bar is simpler.
+            app.set_error(delete_result.unwrap_err().to_string());
+            app.active_modal = ActiveModal::None; // Close the confirmation modal even on error
+        }
+    }
+
+    Ok(())
+}
+
+fn sumbit_delete_body_weight(app: &mut App, bodyweight_id: u64) -> Result<(), AppInputError> {
+    match app.service.delete_bodyweight(bodyweight_id as i64) {
+        Ok(_) => Ok(()),
+        Err(e) => Err(AppInputError::DbError(format!(
+            "Error deleting bodyweight: {}",
+            e
+        ))),
+    }
 }
 
 pub fn handle_create_exercise_modal_input(app: &mut App, key: KeyEvent) -> Result<()> {

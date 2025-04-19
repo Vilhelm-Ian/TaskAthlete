@@ -1515,6 +1515,17 @@ fn test_get_latest_bodyweight() -> Result<()> {
 }
 
 #[test]
+fn test_delete_body_weight() -> Result<()> {
+    let mut service = create_test_service()?;
+    let id = service.add_bodyweight_entry(Utc::now() - Duration::days(2), 50.0)?;
+    let result = service.delete_bodyweight(1);
+    assert!(result.is_ok());
+    let result = service.delete_bodyweight(1);
+    assert!(result.is_err());
+    Ok(())
+}
+
+#[test]
 fn test_bodyweight_workout_needs_log() -> Result<()> {
     let mut service = create_test_service()?;
     service.create_exercise("Pull-ups", ExerciseType::BodyWeight, Some("back"))?;
@@ -1599,20 +1610,20 @@ fn test_add_list_bodyweight() -> Result<()> {
     assert_eq!(entries.len(), 3);
 
     // Check order (descending by timestamp)
-    assert_eq!(entries[0].1, 70.8); // date3
+    assert_eq!(entries[0].2, 70.8); // date3
                                     // Tolerate small difference in timestamp comparison
-    assert!((entries[0].0 - date3).num_milliseconds().abs() < 100);
+    assert!((entries[0].1 - date3).num_milliseconds().abs() < 100);
 
-    assert_eq!(entries[1].1, 71.0); // date2
-    assert!((entries[1].0 - date2).num_milliseconds().abs() < 100);
+    assert_eq!(entries[1].2, 71.0); // date2
+    assert!((entries[1].1 - date2).num_milliseconds().abs() < 100);
 
-    assert_eq!(entries[2].1, 70.5); // date1
-    assert!((entries[2].0 - date1).num_milliseconds().abs() < 100);
+    assert_eq!(entries[2].2, 70.5); // date1
+    assert!((entries[2].1 - date1).num_milliseconds().abs() < 100);
 
     // Test limit
     let limited_entries = service.list_bodyweights(1)?;
     assert_eq!(limited_entries.len(), 1);
-    assert_eq!(limited_entries[0].1, 70.8); // Should be the latest one
+    assert_eq!(limited_entries[0].2, 70.8); // Should be the latest one
 
     Ok(())
 }
@@ -1647,5 +1658,55 @@ fn test_target_bodyweight_config() -> Result<()> {
         _ => panic!("Expected InvalidBodyweightInput error"),
     }
 
+    Ok(())
+}
+
+#[test]
+fn get_all_dates_exercised() -> Result<()> {
+    let mut service = create_test_service()?;
+    let today = Utc::now().date_naive();
+    let yesterday = today - Duration::days(1);
+    service.create_exercise("Bench Press", ExerciseType::Resistance, Some("chest"))?;
+    service.add_workout(
+        "Bench Press",
+        today,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )?;
+    service.add_workout(
+        "Bench Press",
+        today,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )?;
+    service.add_workout(
+        "Bench Press",
+        yesterday,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )?;
+    let dates = service.get_all_dates_with_exercise()?;
+    assert_eq!(dates.len(), 2);
     Ok(())
 }

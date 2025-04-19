@@ -1,6 +1,6 @@
 //src/app/state.rs
 // task-athlete-tui/src/app/state.rs
- // Use error from parent mod
+// Use error from parent mod
 use chrono::Utc;
 use ratatui::widgets::{ListState, TableState};
 use std::time::Instant;
@@ -135,6 +135,10 @@ pub enum ActiveModal {
         exercise_name: String,
         set_index: usize, // For display purposes ("Delete set X of Y?")
     },
+    ConfirmDeleteBodyWeight {
+        body_weight_id: u64,
+        set_index: usize, // For display purposes ("Delete set X of Y?")
+    },
     // Add more here
 }
 
@@ -163,7 +167,7 @@ pub struct App {
 
     // === Bodyweight Tab State ===
     pub bw_focus: BodyweightFocus,
-    pub bw_history: Vec<(chrono::DateTime<Utc>, f64)>,
+    pub bw_history: Vec<(usize, chrono::DateTime<Utc>, f64)>,
     pub bw_history_state: TableState,
     pub bw_target: Option<f64>,
     pub bw_latest: Option<f64>,

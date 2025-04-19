@@ -3,6 +3,7 @@ use thiserror::Error;
 // Declare the modules within the app directory
 pub mod actions;
 pub mod data;
+pub mod input;
 pub mod modals;
 pub mod navigation;
 pub mod state;

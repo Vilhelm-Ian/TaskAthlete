@@ -1,6 +1,6 @@
 //src/db.rs
 use anyhow::{bail, Context, Result};
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use rusqlite::{named_params, params, Connection, OptionalExtension, Row, ToSql}; // Import named_params
 use std::collections::HashMap; // For listing aliases
 use std::fmt;
@@ -196,6 +196,8 @@ pub enum DbError {
     ExerciseNameNotUnique(String),
     #[error("No workout data found for exercise '{0}'")]
     NoWorkoutDataFound(String),
+    #[error("BodyWeight Entry not found '{0}'")]
+    BodyWeightEntryNotFound(i64),
 }
 
 const DB_FILE_NAME: &str = "workouts.sqlite";
@@ -1066,12 +1068,14 @@ pub fn get_latest_bodyweight(conn: &Connection) -> Result<Option<f64>, DbError> 
 pub fn list_bodyweights(
     conn: &Connection,
     limit: u32,
-) -> Result<Vec<(DateTime<Utc>, f64)>, DbError> {
-    let mut stmt =
-        conn.prepare("SELECT timestamp, weight FROM bodyweights ORDER BY timestamp DESC LIMIT ?1")?;
+) -> Result<Vec<(usize, DateTime<Utc>, f64)>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT id, timestamp, weight FROM bodyweights ORDER BY timestamp DESC LIMIT ?1",
+    )?;
     let iter = stmt.query_map(params![limit], |row| {
-        let timestamp_str: String = row.get(0)?;
-        let weight: f64 = row.get(1)?;
+        let id: usize = row.get(0)?;
+        let timestamp_str: String = row.get(1)?;
+        let weight: f64 = row.get(2)?;
         let timestamp = DateTime::parse_from_rfc3339(&timestamp_str)
             .map(|dt| dt.with_timezone(&Utc))
             .map_err(|e| {
@@ -1081,8 +1085,43 @@ pub fn list_bodyweights(
                     Box::new(e),
                 )
             })?;
-        Ok((timestamp, weight))
+        Ok((id, timestamp, weight))
     })?;
     iter.collect::<Result<Vec<_>, _>>()
+        .map_err(DbError::QueryFailed)
+}
+
+pub fn delete_bodyweight(conn: &Connection, id: i64) -> Result<usize, DbError> {
+    let result = conn
+        .execute("DELETE FROM bodyweights WHERE id = ?", params![id])
+        .map_err(DbError::DeleteFailed);
+    if let Ok(id) = result {
+        if id == 0 {
+            Err(DbError::BodyWeightEntryNotFound(id as i64))
+        } else {
+            Ok(id)
+        }
+    } else {
+        result
+    }
+}
+
+pub fn get_all_dates_with_exercise(conn: &Connection) -> Result<Vec<NaiveDate>, DbError> {
+    let mut stmt = conn
+        .prepare("SELECT DISTINCT DATE(timestamp) FROM workouts")
+        .map_err(DbError::QueryFailed)?;
+
+    let date_iter = stmt
+        .query_map([], |row| {
+            let date_str: String = row.get(0)?; // "YYYY-MM-DD"
+            let date = date_str
+                .parse::<NaiveDate>()
+                .map_err(|_| rusqlite::Error::InvalidQuery)?;
+            Ok(date)
+        })
+        .map_err(DbError::QueryFailed)?;
+
+    date_iter
+        .collect::<Result<Vec<_>, _>>()
         .map_err(DbError::QueryFailed)
 }

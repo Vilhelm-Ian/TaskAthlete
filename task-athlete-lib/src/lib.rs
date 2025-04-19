@@ -256,8 +256,12 @@ impl AppService {
     }
 
     /// Lists logged bodyweight entries.
-    pub fn list_bodyweights(&self, limit: u32) -> Result<Vec<(DateTime<Utc>, f64)>> {
+    pub fn list_bodyweights(&self, limit: u32) -> Result<Vec<(usize, DateTime<Utc>, f64)>> {
         db::list_bodyweights(&self.conn, limit).context("Failed to list bodyweights from database")
+    }
+
+    pub fn delete_bodyweight(&mut self, id: i64) -> Result<usize, DbError> {
+        db::delete_bodyweight(&self.conn, id)
     }
 
     // --- Database Path ---
@@ -949,5 +953,9 @@ impl AppService {
 
         db::calculate_daily_volume_filtered(&self.conn, resolved_filters)
             .context("Failed to calculate workout volume from database")
+    }
+
+    pub fn get_all_dates_with_exercise(&self) -> Result<Vec<NaiveDate>, DbError> {
+        db::get_all_dates_with_exercise(&self.conn)
     }
 }

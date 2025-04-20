@@ -86,6 +86,24 @@ fn render_log_set_list(f: &mut Frame, app: &mut App, area: Rect) {
             Style::default().fg(Color::DarkGray)
         });
 
+    // --- Determine which columns have data ---
+    let sets = &app.log_sets_for_selected_exercise; // Borrow for multiple iterations
+
+    // Check if *any* set has a value for the optional fields
+    let has_reps = sets.iter().any(|w| w.reps.is_some());
+    let has_weight = sets.iter().any(|w| w.weight.is_some());
+    let has_duration = sets.iter().any(|w| w.duration_minutes.is_some());
+    let has_distance = sets.iter().any(|w| w.distance.is_some());
+    // Consider empty strings as "no data" for notes if desired:
+    // let has_notes = sets.iter().any(|w| w.notes.as_ref().map_or(false, |s| !s.is_empty()));
+    let has_notes = sets.iter().any(|w| w.notes.is_some()); // Original check based on Option
+
+    // --- Prepare dynamic header, rows, and widths ---
+
+    let mut header_cells_vec = vec![Cell::from("Set").style(Style::default().fg(Color::LightBlue))];
+    let mut widths_vec = vec![Constraint::Length(5)]; // "Set" column
+
+    // Define unit strings regardless of whether columns are shown
     let weight_unit = match app.service.config.units {
         Units::Metric => "kg",
         Units::Imperial => "lbs",
@@ -94,60 +112,95 @@ fn render_log_set_list(f: &mut Frame, app: &mut App, area: Rect) {
         Units::Metric => "km",
         Units::Imperial => "mi",
     };
-    let weight_cell = format!("Weight ({})", weight_unit);
-    let distance_cell = format!("Distance ({})", dist_unit);
-    let header_cells = [
-        "Set",
-        "Reps",
-        &weight_cell,
-        "Duration",
-        &distance_cell,
-        "Notes",
-    ]
-    .into_iter()
-    .map(|h| Cell::from(h).style(Style::default().fg(Color::LightBlue)));
-    let header = Row::new(header_cells).height(1).bottom_margin(1);
+    let weight_cell_text = format!("Weight ({})", weight_unit);
+    let distance_cell_text = format!("Distance ({})", dist_unit);
 
-    let rows = app
-        .log_sets_for_selected_exercise
+    if has_reps {
+        header_cells_vec.push(Cell::from("Reps").style(Style::default().fg(Color::LightBlue)));
+        widths_vec.push(Constraint::Length(6));
+    }
+    if has_weight {
+        header_cells_vec.push(
+            Cell::from(weight_cell_text.as_str()).style(Style::default().fg(Color::LightBlue)),
+        );
+        widths_vec.push(Constraint::Length(8));
+    }
+    if has_duration {
+        header_cells_vec.push(Cell::from("Duration").style(Style::default().fg(Color::LightBlue)));
+        widths_vec.push(Constraint::Length(10));
+    }
+    if has_distance {
+        header_cells_vec.push(
+            Cell::from(distance_cell_text.as_str()).style(Style::default().fg(Color::LightBlue)),
+        );
+        widths_vec.push(Constraint::Length(10));
+    }
+    if has_notes {
+        header_cells_vec.push(Cell::from("Notes").style(Style::default().fg(Color::LightBlue)));
+        widths_vec.push(Constraint::Min(10)); // Notes column expands
+    } else {
+        // If Notes column is hidden, make the *last visible* column expand instead
+        if let Some(last_width) = widths_vec.last_mut() {
+            // Change Length constraint to Min to make it expand
+            match last_width {
+                Constraint::Length(l) => *last_width = Constraint::Min(*l),
+                // If it was already Min/Max/Percentage/Ratio, leave it as is
+                _ => {}
+            }
+        }
+        // Handle edge case: only "Set" column is visible
+        if widths_vec.len() == 1 {
+            widths_vec[0] = Constraint::Min(5);
+        }
+    }
+
+    let header = Row::new(header_cells_vec).height(1).bottom_margin(1);
+
+    let rows: Vec<Row> = sets // Need to collect into Vec<Row> for Table::new
         .iter()
         .enumerate()
         .map(|(i, w)| {
-            let weight_display = match app.service.config.units {
-                Units::Metric => w.weight,
-                Units::Imperial => w.weight.map(|kg| kg * 2.20462),
-            };
-            let weight_str = weight_display.map_or("-".to_string(), |v| format!("{:.1}", v));
+            let mut row_cells = vec![Cell::from(format!("{}", i + 1))]; // "Set" number cell
 
-            let dist_val = match app.service.config.units {
-                Units::Metric => w.distance,
-                Units::Imperial => w.distance.map(|km| km * 0.621_371),
-            };
-            let dist_str = dist_val.map_or("-".to_string(), |v| format!("{:.1}", v));
-
-            Row::new(vec![
-                Cell::from(format!("{}", i + 1)),
-                Cell::from(w.reps.map_or("-".to_string(), |v| v.to_string())),
-                Cell::from(weight_str),
-                Cell::from(
+            if has_reps {
+                row_cells.push(Cell::from(
+                    w.reps.map_or("-".to_string(), |v| v.to_string()),
+                ));
+            }
+            if has_weight {
+                let weight_display = match app.service.config.units {
+                    Units::Metric => w.weight,
+                    Units::Imperial => w.weight.map(|kg| kg * 2.20462),
+                };
+                let weight_str = weight_display.map_or("-".to_string(), |v| format!("{:.1}", v));
+                row_cells.push(Cell::from(weight_str));
+            }
+            if has_duration {
+                row_cells.push(Cell::from(
                     w.duration_minutes
                         .map_or("-".to_string(), |v| format!("{} min", v)),
-                ),
-                Cell::from(dist_str),
-                Cell::from(w.notes.clone().unwrap_or_else(|| "-".to_string())),
-            ])
-        });
+                ));
+            }
+            if has_distance {
+                let dist_val = match app.service.config.units {
+                    Units::Metric => w.distance,
+                    Units::Imperial => w.distance.map(|km| km * 0.621_371),
+                };
+                let dist_str = dist_val.map_or("-".to_string(), |v| format!("{:.1}", v));
+                row_cells.push(Cell::from(dist_str));
+            }
+            if has_notes {
+                row_cells.push(Cell::from(
+                    w.notes.clone().unwrap_or_else(|| "-".to_string()),
+                ));
+            }
 
-    let widths = [
-        Constraint::Length(5),
-        Constraint::Length(6),
-        Constraint::Length(8),
-        Constraint::Length(10),
-        Constraint::Length(10),
-        Constraint::Min(10),
-    ];
+            Row::new(row_cells) // Create the row from the dynamic cell list
+        })
+        .collect(); // Collect the iterator into a Vec<Row>
 
-    let table = Table::new(rows, widths)
+    // Use the dynamically generated widths
+    let table = Table::new(rows, &widths_vec) // Pass the Vec or a slice reference
         .header(header)
         .block(table_block)
         .highlight_style(

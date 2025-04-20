@@ -12,7 +12,7 @@ use ratatui::{
 };
 use task_athlete_lib::Units; // Import Units
 
-pub fn render_bodyweight_tab(f: &mut Frame, app: &mut App, area: Rect) {
+pub fn render(f: &mut Frame, app: &mut App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])

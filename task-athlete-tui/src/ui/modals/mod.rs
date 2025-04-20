@@ -11,7 +11,7 @@ use crate::app::App;
 use ratatui::Frame;
 
 /// Renders the currently active modal, if any.
-pub fn render_modal(f: &mut Frame, app: &App) {
+pub fn render(f: &mut Frame, app: &App) {
     // Dispatch rendering to the appropriate function based on the active modal
     match &app.active_modal {
         ActiveModal::Help => help::render_help_modal(f),

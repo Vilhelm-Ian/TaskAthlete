@@ -7,7 +7,7 @@ use ratatui::{
     Frame,
 };
 
-pub fn render_tabs(f: &mut Frame, app: &App, area: Rect) {
+pub fn render(f: &mut Frame, app: &App, area: Rect) {
     let titles: Vec<Line> = ["Log (F1)", "History (F2)", "Graphs (F3)", "Bodyweight (F4)"]
         .iter()
         .map(|t| Line::from(Span::styled(*t, Style::default().fg(Color::Gray))))

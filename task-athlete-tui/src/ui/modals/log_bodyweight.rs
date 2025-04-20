@@ -4,7 +4,7 @@ use crate::{
         state::{ActiveModal, LogBodyweightField},
         App,
     },
-    ui::layout::centered_rect_fixed,
+    ui::layout::centered_rect,
 };
 use ratatui::{
     layout::{Constraint, Direction, Layout, Margin, Rect},
@@ -32,8 +32,8 @@ pub(super) fn render_log_bodyweight_modal(f: &mut Frame, app: &App) {
             .border_style(Style::new().yellow());
 
         let has_error = error_message.is_some();
-        let height = 6 + u16::from(has_error); // Base height + error line
-        let area = centered_rect_fixed(60, height, f.size());
+        let height = 8 + u16::from(has_error); // Base height + error line
+        let area = centered_rect(60, height, f.size());
 
         f.render_widget(Clear, area);
         f.render_widget(block, area);

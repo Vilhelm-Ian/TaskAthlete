@@ -7,7 +7,7 @@ use crate::{
         state::{ActiveModal, AddWorkoutField},
         App,
     },
-    ui::layout::centered_rect_fixed,
+    ui::layout::centered_rect,
 };
 use ratatui::{
     layout::{Constraint, Direction, Layout, Margin, Rect},
@@ -41,7 +41,7 @@ pub(super) fn render_add_workout_modal(f: &mut Frame, app: &App) {
              .border_style(Style::new().yellow());
 
          let height = calculate_workout_modal_height(error_message.is_some());
-         let area = centered_rect_fixed(80, height, f.size());
+         let area = centered_rect(80, height, f.size());
 
          f.render_widget(Clear, area);
          f.render_widget(block, area);
@@ -92,7 +92,7 @@ pub(super) fn render_edit_workout_modal(f: &mut Frame, app: &App) {
 
          // Edit modal might be slightly shorter as exercise name isn't an input field
          let height = calculate_workout_modal_height(error_message.is_some()) - 1;
-         let area = centered_rect_fixed(80, height, f.size());
+         let area = centered_rect(80, height, f.size());
 
          f.render_widget(Clear, area);
          f.render_widget(block, area);

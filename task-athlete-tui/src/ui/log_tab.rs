@@ -8,7 +8,7 @@ use ratatui::{
 };
 use task_athlete_lib::{Units, Workout}; // Import Units
 
-pub fn render_log_tab(f: &mut Frame, app: &mut App, area: Rect) {
+pub fn render(f: &mut Frame, app: &mut App, area: Rect) {
     let today_str = Utc::now().date_naive();
     let date_header_str = if app.log_viewed_date == today_str {
         format!("--- Today ({}) ---", app.log_viewed_date.format("%Y-%m-%d"))
@@ -66,6 +66,7 @@ fn render_log_exercise_list(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_stateful_widget(list, area, &mut app.log_exercise_list_state);
 }
 
+#[allow(clippy::struct_excessive_bools)]
 struct ColumnVisibility {
     has_reps: bool,
     has_weight: bool,

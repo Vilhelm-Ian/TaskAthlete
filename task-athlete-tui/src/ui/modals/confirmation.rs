@@ -1,6 +1,6 @@
 use crate::{
     app::{state::ActiveModal, App},
-    ui::layout::centered_rect_fixed,
+    ui::layout::centered_rect,
 };
 use ratatui::{
     layout::{Constraint, Direction, Layout, Margin},
@@ -30,7 +30,7 @@ pub(super) fn render_confirmation_modal(f: &mut Frame, app: &App) {
         let modal_width = text_width + 4; // Add padding for borders/margins
         let modal_height = 5; // Title, border, question, options, border
 
-        let area = centered_rect_fixed(modal_width, modal_height, f.size());
+        let area = centered_rect(modal_width, modal_height, f.size());
         f.render_widget(Clear, area);
         f.render_widget(block, area);
 
@@ -73,7 +73,7 @@ pub(super) fn render_confirmation_bodyweight_modal(f: &mut Frame, app: &App) {
         let modal_width = text_width + 4; // Add padding for borders/margins
         let modal_height = 5; // Title, border, question, options, border
 
-        let area = centered_rect_fixed(modal_width, modal_height, f.size());
+        let area = centered_rect(modal_width, modal_height, f.size());
         f.render_widget(Clear, area);
         f.render_widget(block, area);
 

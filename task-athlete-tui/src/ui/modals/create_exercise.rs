@@ -4,7 +4,7 @@ use crate::{
         state::{ActiveModal, AddExerciseField},
         App,
     },
-    ui::layout::centered_rect_fixed,
+    ui::layout::centered_rect,
 };
 use ratatui::{
     layout::{Constraint, Direction, Layout, Margin, Rect},
@@ -30,7 +30,7 @@ pub(super) fn render_create_exercise_modal(f: &mut Frame, app: &App) {
 
         let has_error = error_message.is_some();
         let height = 10 + if has_error { 1 } else { 0 };
-        let area = centered_rect_fixed(60, height, f.size());
+        let area = centered_rect(60, height, f.size());
 
         f.render_widget(Clear, area);
         f.render_widget(block, area);

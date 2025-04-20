@@ -8,7 +8,7 @@ use ratatui::{
     Frame,
 };
 
-pub fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
+pub fn render(f: &mut Frame, app: &App, area: Rect) {
     let status_text = match &app.active_modal {
          ActiveModal::None => match app.active_tab {
              crate::app::ActiveTab::Log => "[Tab] Focus | [↑↓/jk] Nav | [←→/hl] Date | [a]dd | [l]og set | [e]dit | [d]elete | [g]raphs | [?] Help | [Q]uit ",

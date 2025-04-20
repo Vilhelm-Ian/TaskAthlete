@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{Block, Borders, Cell, List, ListItem, Paragraph, Row, Table},
     Frame,
 };
-use task_athlete_lib::Units; // Import Units
+use task_athlete_lib::{Units, Workout}; // Import Units
 
 pub fn render_log_tab(f: &mut Frame, app: &mut App, area: Rect) {
     let today_str = Utc::now().date_naive();
@@ -66,141 +66,190 @@ fn render_log_exercise_list(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_stateful_widget(list, area, &mut app.log_exercise_list_state);
 }
 
-fn render_log_set_list(f: &mut Frame, app: &mut App, area: Rect) {
-    let selected_exercise_name = app
-        .log_exercise_list_state
-        .selected()
-        .and_then(|i| app.log_exercises_today.get(i));
+struct ColumnVisibility {
+    has_reps: bool,
+    has_weight: bool,
+    has_duration: bool,
+    has_distance: bool,
+    has_notes: bool,
+}
 
-    let title = match selected_exercise_name {
-        Some(name) => format!("Sets for: {}", name),
-        None => "Select an Exercise".to_string(),
-    };
+// --- Helper Functions ---
 
-    let table_block = Block::default()
+/// Determines which optional columns have data based on the provided sets.
+fn determine_column_visibility(sets: &[Workout]) -> ColumnVisibility {
+    ColumnVisibility {
+        has_reps: sets.iter().any(|w| w.reps.is_some()),
+        has_weight: sets.iter().any(|w| w.weight.is_some()),
+        has_duration: sets.iter().any(|w| w.duration_minutes.is_some()),
+        has_distance: sets.iter().any(|w| w.distance.is_some()),
+        // Consider empty strings as "no data" for notes if desired:
+        // has_notes: sets.iter().any(|w| w.notes.as_ref().map_or(false, |s| !s.is_empty())),
+        has_notes: sets.iter().any(|w| w.notes.is_some()), // Original check
+    }
+}
+
+/// Creates the styled block for the table.
+fn create_table_block(title: String, is_focused: bool) -> Block<'static> {
+    Block::default()
         .borders(Borders::ALL)
         .title(title)
-        .border_style(if app.log_focus == LogFocus::SetList {
+        .border_style(if is_focused {
             Style::default().fg(Color::Yellow)
         } else {
             Style::default().fg(Color::DarkGray)
-        });
+        })
+}
 
-    // --- Determine which columns have data ---
-    let sets = &app.log_sets_for_selected_exercise; // Borrow for multiple iterations
+/// Creates the header row based on visible columns and units.
+fn create_table_header<'a>(visibility: &ColumnVisibility, units: Units) -> Row<'a> {
+    let mut header_cells = vec![Cell::from("Set").style(Style::default().fg(Color::LightBlue))];
 
-    // Check if *any* set has a value for the optional fields
-    let has_reps = sets.iter().any(|w| w.reps.is_some());
-    let has_weight = sets.iter().any(|w| w.weight.is_some());
-    let has_duration = sets.iter().any(|w| w.duration_minutes.is_some());
-    let has_distance = sets.iter().any(|w| w.distance.is_some());
-    // Consider empty strings as "no data" for notes if desired:
-    // let has_notes = sets.iter().any(|w| w.notes.as_ref().map_or(false, |s| !s.is_empty()));
-    let has_notes = sets.iter().any(|w| w.notes.is_some()); // Original check based on Option
-
-    // --- Prepare dynamic header, rows, and widths ---
-
-    let mut header_cells_vec = vec![Cell::from("Set").style(Style::default().fg(Color::LightBlue))];
-    let mut widths_vec = vec![Constraint::Length(5)]; // "Set" column
-
-    // Define unit strings regardless of whether columns are shown
-    let weight_unit = match app.service.config.units {
-        Units::Metric => "kg",
-        Units::Imperial => "lbs",
-    };
-    let dist_unit = match app.service.config.units {
-        Units::Metric => "km",
-        Units::Imperial => "mi",
-    };
-    let weight_cell_text = format!("Weight ({})", weight_unit);
-    let distance_cell_text = format!("Distance ({})", dist_unit);
-
-    if has_reps {
-        header_cells_vec.push(Cell::from("Reps").style(Style::default().fg(Color::LightBlue)));
-        widths_vec.push(Constraint::Length(6));
+    if visibility.has_reps {
+        header_cells.push(Cell::from("Reps").style(Style::default().fg(Color::LightBlue)));
     }
-    if has_weight {
-        header_cells_vec.push(
-            Cell::from(weight_cell_text.as_str()).style(Style::default().fg(Color::LightBlue)),
+    if visibility.has_weight {
+        let weight_unit = match units {
+            Units::Metric => "kg",
+            Units::Imperial => "lbs",
+        };
+        header_cells.push(
+            Cell::from(format!("Weight ({})", weight_unit))
+                .style(Style::default().fg(Color::LightBlue)),
         );
-        widths_vec.push(Constraint::Length(8));
     }
-    if has_duration {
-        header_cells_vec.push(Cell::from("Duration").style(Style::default().fg(Color::LightBlue)));
-        widths_vec.push(Constraint::Length(10));
+    if visibility.has_duration {
+        header_cells.push(Cell::from("Duration").style(Style::default().fg(Color::LightBlue)));
     }
-    if has_distance {
-        header_cells_vec.push(
-            Cell::from(distance_cell_text.as_str()).style(Style::default().fg(Color::LightBlue)),
+    if visibility.has_distance {
+        let dist_unit = match units {
+            Units::Metric => "km",
+            Units::Imperial => "mi",
+        };
+        header_cells.push(
+            Cell::from(format!("Distance ({})", dist_unit))
+                .style(Style::default().fg(Color::LightBlue)),
         );
-        widths_vec.push(Constraint::Length(10));
     }
-    if has_notes {
-        header_cells_vec.push(Cell::from("Notes").style(Style::default().fg(Color::LightBlue)));
-        widths_vec.push(Constraint::Min(10)); // Notes column expands
+    if visibility.has_notes {
+        header_cells.push(Cell::from("Notes").style(Style::default().fg(Color::LightBlue)));
+    }
+
+    Row::new(header_cells).height(1).bottom_margin(1)
+}
+
+/// Calculates the column widths based on visible columns.
+fn calculate_table_widths(visibility: &ColumnVisibility) -> Vec<Constraint> {
+    let mut widths = vec![Constraint::Length(5)]; // "Set" column
+
+    if visibility.has_reps {
+        widths.push(Constraint::Length(6));
+    }
+    if visibility.has_weight {
+        widths.push(Constraint::Length(8));
+    }
+    if visibility.has_duration {
+        widths.push(Constraint::Length(10));
+    }
+    if visibility.has_distance {
+        widths.push(Constraint::Length(10));
+    }
+
+    if visibility.has_notes {
+        widths.push(Constraint::Min(10)); // Notes column expands
     } else {
-        // If Notes column is hidden, make the *last visible* column expand instead
-        if let Some(last_width) = widths_vec.last_mut() {
-            // Change Length constraint to Min to make it expand
+        // Make the last *visible* column expand instead
+        if let Some(last_width) = widths.last_mut() {
             match last_width {
                 Constraint::Length(l) => *last_width = Constraint::Min(*l),
-                // If it was already Min/Max/Percentage/Ratio, leave it as is
-                _ => {}
+                _ => {} // Leave Min/Max/Percentage/Ratio as is
             }
         }
         // Handle edge case: only "Set" column is visible
-        if widths_vec.len() == 1 {
-            widths_vec[0] = Constraint::Min(5);
+        if widths.len() == 1 {
+            widths[0] = Constraint::Min(5);
         }
     }
+    widths
+}
 
-    let header = Row::new(header_cells_vec).height(1).bottom_margin(1);
-
-    let rows: Vec<Row> = sets // Need to collect into Vec<Row> for Table::new
-        .iter()
+/// Creates the data rows for the table based on visible columns and units.
+fn create_table_rows<'a>(
+    sets: &'a [Workout],
+    visibility: ColumnVisibility,
+    units: Units,
+) -> Vec<Row<'a>> {
+    sets.iter()
         .enumerate()
         .map(|(i, w)| {
             let mut row_cells = vec![Cell::from(format!("{}", i + 1))]; // "Set" number cell
 
-            if has_reps {
+            if visibility.has_reps {
                 row_cells.push(Cell::from(
                     w.reps.map_or("-".to_string(), |v| v.to_string()),
                 ));
             }
-            if has_weight {
-                let weight_display = match app.service.config.units {
+            if visibility.has_weight {
+                let weight_display = match units {
                     Units::Metric => w.weight,
                     Units::Imperial => w.weight.map(|kg| kg * 2.20462),
                 };
                 let weight_str = weight_display.map_or("-".to_string(), |v| format!("{:.1}", v));
                 row_cells.push(Cell::from(weight_str));
             }
-            if has_duration {
+            if visibility.has_duration {
                 row_cells.push(Cell::from(
                     w.duration_minutes
                         .map_or("-".to_string(), |v| format!("{} min", v)),
                 ));
             }
-            if has_distance {
-                let dist_val = match app.service.config.units {
+            if visibility.has_distance {
+                let dist_val = match units {
                     Units::Metric => w.distance,
                     Units::Imperial => w.distance.map(|km| km * 0.621_371),
                 };
                 let dist_str = dist_val.map_or("-".to_string(), |v| format!("{:.1}", v));
                 row_cells.push(Cell::from(dist_str));
             }
-            if has_notes {
-                row_cells.push(Cell::from(
-                    w.notes.clone().unwrap_or_else(|| "-".to_string()),
-                ));
+            if visibility.has_notes {
+                row_cells.push(Cell::from(w.notes.as_deref().unwrap_or("-"))); // Use as_deref for efficiency
             }
 
-            Row::new(row_cells) // Create the row from the dynamic cell list
+            Row::new(row_cells)
         })
-        .collect(); // Collect the iterator into a Vec<Row>
+        .collect()
+}
 
-    // Use the dynamically generated widths
-    let table = Table::new(rows, &widths_vec) // Pass the Vec or a slice reference
+// --- Main Rendering Function (Now Cleaner) ---
+
+fn render_log_set_list(f: &mut Frame, app: &mut App, area: Rect) {
+    // 1. Determine Title and Focus
+    let selected_exercise_name = app
+        .log_exercise_list_state
+        .selected()
+        .and_then(|i| app.log_exercises_today.get(i));
+
+    let title = selected_exercise_name
+        .map(|name| format!("Sets for: {}", name))
+        .unwrap_or_else(|| "Select an Exercise".to_string());
+
+    let is_focused = app.log_focus == LogFocus::SetList;
+
+    // 2. Get necessary data
+    let sets = &app.log_sets_for_selected_exercise;
+    let units = app.service.config.units;
+
+    // 3. Check column visibility
+    let visibility = determine_column_visibility(sets);
+
+    // 4. Create reusable table components using helpers
+    let table_block = create_table_block(title, is_focused);
+    let header = create_table_header(&visibility, units);
+    let widths = calculate_table_widths(&visibility);
+    let rows = create_table_rows(sets, visibility, units);
+
+    // 5. Build the final table widget
+    let table = Table::new(rows, &widths) // Pass widths as a slice
         .header(header)
         .block(table_block)
         .highlight_style(
@@ -210,5 +259,6 @@ fn render_log_set_list(f: &mut Frame, app: &mut App, area: Rect) {
         )
         .highlight_symbol(">> ");
 
+    // 6. Render the stateful widget
     f.render_stateful_widget(table, area, &mut app.log_set_table_state);
 }

@@ -4,7 +4,9 @@
 use chrono::Utc;
 use ratatui::widgets::{ListState, TableState};
 use std::time::Instant;
-use task_athlete_lib::{AppService, ExerciseDefinition, ExerciseType, Workout, WorkoutFilters}; // Keep lib imports
+use task_athlete_lib::{
+    AppService, ExerciseDefinition, ExerciseType, GraphType, Workout, WorkoutFilters,
+}; // Keep lib imports
 
 // Represents the active UI tab
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,6 +72,12 @@ pub enum AddWorkoutField {
     Notes,
     Confirm,
     Cancel,
+}
+
+pub enum GraphsFocus {
+    ExerciseList,
+    GraphTypeList,
+    History,
 }
 
 // Represents the state of active modals
@@ -163,7 +171,16 @@ pub struct App {
     // TODO
 
     // === Graph Tab State ===
-    // TODO
+    pub graph_focus: GraphsFocus,
+    pub graph_exercises_all: Vec<String>, // All available exercises for selection
+    pub graph_exercise_list_state: ListState, // State for exercise list widget
+    pub graph_types_available: Vec<GraphType>, // Static list of graph types
+    pub graph_type_list_state: ListState, // State for graph type list widget
+    pub graph_selected_exercise: Option<String>, // Name of the selected exercise
+    pub graph_selected_type: Option<GraphType>, // Selected graph type enum
+    pub graph_data_points: Vec<(f64, f64)>, // Processed data for the chart
+    pub graph_x_bounds: [f64; 2],         // X-axis bounds for the chart
+    pub graph_y_bounds: [f64; 2],
 
     // === Bodyweight Tab State ===
     pub bw_focus: BodyweightFocus,
@@ -180,17 +197,40 @@ pub struct App {
 impl App {
     pub fn new(service: AppService) -> Self {
         let today = chrono::Utc::now().date_naive();
+        let exercises = service.list_exercises(None, None).unwrap_or_default();
+        let exercises_names = exercises.iter().map(|e| e.name.clone()).collect();
         let mut app = App {
             active_tab: ActiveTab::Log,
             should_quit: false,
             active_modal: ActiveModal::None, // Initialize with None
-            // ... other fields ...
+            // --- Log Tab State ---
             log_focus: LogFocus::ExerciseList,
             log_viewed_date: today,
             log_exercises_today: Vec::new(),
             log_exercise_list_state: ListState::default(),
             log_sets_for_selected_exercise: Vec::new(),
             log_set_table_state: TableState::default(),
+            // --- Graphs Tab State (Initialize here) ---
+            graph_focus: GraphsFocus::ExerciseList, // Start focus on exercise list
+            graph_exercises_all: exercises_names,
+            graph_exercise_list_state: ListState::default(),
+            graph_types_available: vec![
+                // Define available graph types
+                GraphType::Estimated1RM,
+                GraphType::MaxWeight,
+                GraphType::MaxReps,
+                GraphType::WorkoutVolume,
+                GraphType::WorkoutReps,
+                GraphType::WorkoutDuration,
+                GraphType::WorkoutDistance,
+            ],
+            graph_type_list_state: ListState::default(),
+            graph_selected_exercise: None,
+            graph_selected_type: None,
+            graph_data_points: Vec::new(),
+            graph_x_bounds: [0.0, 1.0], // Default bounds
+            graph_y_bounds: [0.0, 1.0], // Default bounds
+            // --- Bodyweight Tab State ---
             bw_focus: BodyweightFocus::History,
             bw_history: Vec::new(),
             bw_history_state: TableState::default(),
@@ -200,6 +240,7 @@ impl App {
             bw_graph_x_bounds: [0.0, 1.0],
             bw_graph_y_bounds: [0.0, 1.0],
             bw_graph_range_months: 3,
+            // --- General State ---
             last_error: None,
             error_clear_time: None,
             service,
@@ -207,8 +248,9 @@ impl App {
         app.log_exercise_list_state.select(Some(0));
         app.log_set_table_state.select(Some(0));
         app.bw_history_state.select(Some(0));
-        // Initial data load is now called explicitly in main loop or where needed
-        // app.refresh_data_for_active_tab(); // Remove initial call here
+        app.graph_exercise_list_state.select(Some(0)); // Select first item if list non-empty
+        app.graph_type_list_state.select(Some(0)); // Select first item if list non-empty
+                                                   // Initial data load is now called explicitly in main loop or where needed
         app
     }
 

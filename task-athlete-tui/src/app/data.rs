@@ -1,7 +1,7 @@
 use super::state::App;
 use anyhow::{anyhow, Result};
 use chrono::{Datelike, Duration, NaiveDate, Utc};
-use task_athlete_lib::{AppService, DbError, Workout, WorkoutFilters};
+use task_athlete_lib::{AppService, DbError, GraphType as LibGraphType, Workout, WorkoutFilters};
 
 // Make refresh logic methods on App
 impl App {
@@ -205,6 +205,98 @@ impl App {
         let y_padding = ((y_max - y_min) * 0.1).max(1.0);
         self.bw_graph_y_bounds = [(y_min - y_padding).max(0.0), y_max + y_padding];
     }
+    fn refresh_graphs_tab_data(&mut self) {
+        // Load all exercise names if not already loaded
+        if self.graph_exercises_all.is_empty() {
+            match self.service.list_exercises(None, None) {
+                Ok(names) => {
+                    self.graph_exercises_all = names.iter().map(|e| e.name.clone()).collect();
+                    // Ensure selection doesn't go out of bounds if list was empty
+                    if self.graph_exercise_list_state.selected().is_none()
+                        && !self.graph_exercises_all.is_empty()
+                    {
+                        self.graph_exercise_list_state.select(Some(0));
+                    }
+                }
+                Err(e) => self.set_error(format!("Error loading exercise list: {}", e)),
+            }
+        }
+
+        // Update graph data *only if* an exercise and type are selected
+        if self.graph_selected_exercise.is_some() && self.graph_selected_type.is_some() {
+            self.update_graph_data();
+        } else {
+            // Clear graph if no selection
+            self.clear_graph_data();
+        }
+    }
+
+    // Updates the graph data based on current selections
+    pub(crate) fn update_graph_data(&mut self) {
+        let mut should_clear = false;
+        if let (Some(ex_name), Some(graph_type)) = (
+            self.graph_selected_exercise.as_ref(),
+            self.graph_selected_type,
+        ) {
+            match self.service.get_data_for_graph(ex_name, graph_type) {
+                Ok(data) if !data.is_empty() => {
+                    self.graph_data_points = data;
+
+                    // Calculate bounds
+                    let first_day = self
+                        .graph_data_points
+                        .first()
+                        .map(|(x, _)| *x)
+                        .unwrap_or(0.0);
+                    let last_day = self
+                        .graph_data_points
+                        .last()
+                        .map(|(x, _)| *x)
+                        .unwrap_or(first_day + 1.0);
+                    self.graph_x_bounds = [first_day, last_day];
+
+                    let min_y = self
+                        .graph_data_points
+                        .iter()
+                        .map(|(_, y)| *y)
+                        .fold(f64::INFINITY, f64::min);
+                    let max_y = self
+                        .graph_data_points
+                        .iter()
+                        .map(|(_, y)| *y)
+                        .fold(f64::NEG_INFINITY, f64::max);
+                    let y_range = max_y - min_y;
+                    let y_padding = (y_range * 0.1).max(1.0); // Add at least 1 unit padding
+                    self.graph_y_bounds = [(min_y - y_padding).max(0.0), max_y + y_padding];
+                }
+                Ok(_) => {
+                    // Empty data returned
+                    should_clear = true;
+                    self.set_error(format!(
+                        "No data found for '{}' - {}",
+                        ex_name,
+                        graph_type_to_string(graph_type)
+                    ));
+                }
+                Err(e) => {
+                    should_clear = true;
+                    self.set_error(format!("Error loading graph data: {}", e));
+                }
+            }
+        } else {
+            should_clear = true;
+        }
+        if should_clear {
+            self.clear_graph_data();
+        }
+    }
+
+    // Helper to clear graph state
+    fn clear_graph_data(&mut self) {
+        self.graph_data_points.clear();
+        self.graph_x_bounds = [0.0, 1.0];
+        self.graph_y_bounds = [0.0, 1.0];
+    }
 }
 
 // Function needs to be associated with App or take &mut App
@@ -250,6 +342,18 @@ pub fn log_set_previous_exercised_date(app: &mut App) -> Result<()> {
         }
     }
     Ok(())
+}
+
+pub fn graph_type_to_string(graph_type: LibGraphType) -> String {
+    match graph_type {
+        LibGraphType::Estimated1RM => "Estimated 1RM".to_string(),
+        LibGraphType::MaxWeight => "Max Weight Lifted".to_string(),
+        LibGraphType::MaxReps => "Max Reps Per Set".to_string(),
+        LibGraphType::WorkoutVolume => "Workout Volume".to_string(),
+        LibGraphType::WorkoutReps => "Total Reps Per Workout".to_string(), // Clarified name
+        LibGraphType::WorkoutDuration => "Workout Duration (min)".to_string(),
+        LibGraphType::WorkoutDistance => "Workout Distance".to_string(),
+    }
 }
 
 pub fn log_set_next_exercised_date(app: &mut App) -> Result<()> {

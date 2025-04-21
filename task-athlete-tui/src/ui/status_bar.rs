@@ -13,8 +13,8 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
          ActiveModal::None => match app.active_tab {
              crate::app::ActiveTab::Log => "[Tab] Focus | [↑↓/jk] Nav | [←→/hl] Date | [a]dd | [l]og set | [e]dit | [d]elete | [g]raphs | [?] Help | [Q]uit ",
              crate::app::ActiveTab::History => "[↑↓/jk] Nav | [/f] Filter | [e]dit | [d]elete | [?] Help | [Q]uit ",
-             crate::app::ActiveTab::Graphs => "[Tab] Focus | [↑↓/jk] Nav | [/] Filter Exercise | [Enter] Select | [?] Help | [Q]uit ",
              crate::app::ActiveTab::Bodyweight => "[↑↓/jk] Nav Hist | [l]og | [t]arget | [r]ange | [?] Help | [Q]uit ",
+             crate::app::ActiveTab::Graphs => "[Tab] Focus | [↑↓/jk] Nav List | [Enter] Select | [?] Help | [Q]uit "
          }.to_string(),
          ActiveModal::Help => " [Esc/Enter/?] Close Help ".to_string(),
          ActiveModal::LogBodyweight { .. } => " [Esc] Cancel | [Enter] Confirm | [Tab/↑↓] Navigate ".to_string(),

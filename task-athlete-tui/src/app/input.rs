@@ -1,3 +1,5 @@
+use std::error::Error;
+
 // src/app/input.rs
 use super::{
     data::{log_change_date, log_set_next_exercised_date, log_set_previous_exercised_date},
@@ -12,12 +14,13 @@ use super::{
         log_table_previous,
     },
     state::{
-        ActiveModal, ActiveTab, App, BodyweightFocus, LogBodyweightField, LogFocus,
+        ActiveModal, ActiveTab, App, BodyweightFocus, GraphsFocus, LogBodyweightField, LogFocus,
         SetTargetWeightField,
     },
 };
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent};
+use task_athlete_lib::DbError;
 
 // Main key event handler method on App
 impl App {
@@ -114,8 +117,43 @@ impl App {
         Ok(())
     }
 
-    fn handle_graphs_input(&mut self, _key: KeyEvent) -> Result<()> {
-        // TODO
+    fn handle_graphs_input(&mut self, key: KeyEvent) -> Result<()> {
+        match self.graph_focus {
+            GraphsFocus::ExerciseList => match key.code {
+                KeyCode::Char('k') | KeyCode::Up => graphs_exercise_list_previous(self),
+                KeyCode::Char('j') | KeyCode::Down => graphs_exercise_list_next(self)?,
+                KeyCode::Tab => self.graph_focus = GraphsFocus::GraphTypeList,
+                KeyCode::Enter => {
+                    // Set selected exercise, trigger data update, move focus
+                    if let Some(index) = self.graph_exercise_list_state.selected() {
+                        if let Some(name) = self.graph_exercises_all.get(index) {
+                            self.graph_selected_exercise = Some(name.clone());
+                            self.update_graph_data(); // Update based on new selection
+                            self.graph_focus = GraphsFocus::GraphTypeList;
+                        }
+                    }
+                }
+                _ => {}
+            },
+            GraphsFocus::GraphTypeList => match key.code {
+                KeyCode::Char('k') | KeyCode::Up => graphs_type_list_previous(self),
+                KeyCode::Char('j') | KeyCode::Down => graphs_type_list_next(self),
+                KeyCode::Tab => self.graph_focus = GraphsFocus::ExerciseList, // Cycle back
+                KeyCode::Enter => {
+                    // Set selected type, trigger data update, move focus (optional)
+                    if let Some(index) = self.graph_type_list_state.selected() {
+                        if let Some(graph_type) = self.graph_types_available.get(index) {
+                            self.graph_selected_type = Some(*graph_type);
+                            self.update_graph_data(); // Update based on new type
+                                                      // Optionally move focus to graph display, or leave it here
+                                                      // self.graph_focus = GraphsFocus::GraphDisplay;
+                        }
+                    }
+                }
+                _ => {}
+            },
+            GraphsFocus::History => {}
+        }
         Ok(())
     }
 
@@ -163,4 +201,45 @@ impl App {
         }
         Ok(())
     }
+}
+
+pub fn graphs_exercise_list_next(app: &mut App) -> Result<()> {
+    let list_len = app.service.list_exercises(None, None)?.len();
+    if list_len == 0 {
+        return Ok(());
+    }
+    let current_selection = app.graph_exercise_list_state.selected();
+    let i = match current_selection {
+        Some(i) if i >= list_len - 1 => 0,
+        Some(i) => i + 1,
+        None => 0,
+    };
+    app.graph_exercise_list_state.select(Some(i));
+    Ok(())
+}
+
+pub fn graphs_exercise_list_previous(app: &mut App) {
+    let list_len = app.graph_exercises_all.len();
+    if list_len == 0 {
+        return;
+    }
+    let current_selection = app.graph_exercise_list_state.selected();
+    let i = match current_selection {
+        Some(i) if i == 0 => list_len - 1,
+        Some(i) => i - 1,
+        None => list_len.saturating_sub(1),
+    };
+    app.graph_exercise_list_state.select(Some(i));
+}
+
+pub fn graphs_type_list_next(app: &mut App) {
+    // Assuming app.graph_types_available is populated
+    let list_len = app.graph_types_available.len();
+    super::navigation_helpers::list_next(&mut app.graph_type_list_state, list_len);
+}
+
+pub fn graphs_type_list_previous(app: &mut App) {
+    // Assuming app.graph_types_available is populated
+    let list_len = app.graph_types_available.len();
+    super::navigation_helpers::list_previous(&mut app.graph_type_list_state, list_len);
 }

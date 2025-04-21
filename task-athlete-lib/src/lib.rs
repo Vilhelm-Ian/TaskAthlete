@@ -1,6 +1,9 @@
 use anyhow::{bail, Context, Result};
 use chrono::format::Numeric;
-use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc}; // Add Duration, TimeZone
+use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
+use db::list_workouts_filtered;
+use std::collections::BTreeMap;
+// Add Duration, TimeZone
 use rusqlite::Connection;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf}; // For list_aliases return type
@@ -42,6 +45,17 @@ pub use db::{
 //     Distance,
 //     // Combinations could be added if needed, but individual flags are simpler
 // }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)] // Add Hash for potential future use
+pub enum GraphType {
+    Estimated1RM,
+    MaxWeight, // Changed from MaxWeight (ambiguous)
+    MaxReps,   // Changed from MaxReps (ambiguous)
+    WorkoutVolume,
+    WorkoutReps, // Replaced MaxWeightForReps
+    WorkoutDuration,
+    WorkoutDistance,
+    // Add more as needed, e.g., MaxWeightForReps(u32) if clarified
+}
 
 #[derive(Debug, Clone, PartialEq, Default)] // Add Default
 pub struct PBInfo {
@@ -957,5 +971,132 @@ impl AppService {
 
     pub fn get_all_dates_with_exercise(&self) -> Result<Vec<NaiveDate>, DbError> {
         db::get_all_dates_with_exercise(&self.conn)
+    }
+
+    /// Fetches and processes workout data for the specified graph type,
+    /// aggregating data per day.
+    /// Returns Vec<(f64, f64)> where x is days since first workout, y is the metric.
+    pub fn get_data_for_graph(
+        &self,
+        exercise_identifier: &str,
+        graph_type: GraphType,
+    ) -> Result<Vec<(f64, f64)>> {
+        let canonical_name = self
+            .resolve_identifier_to_canonical_name(exercise_identifier)?
+            .ok_or_else(|| DbError::ExerciseNotFound(exercise_identifier.to_string()))?;
+
+        // Fetch raw history, sorted chronologically
+        let mut filter = WorkoutFilters::default();
+        filter.exercise_name = Some(&canonical_name);
+        let history = list_workouts_filtered(&self.conn, filter)?;
+        if history.is_empty() {
+            return Ok(vec![]); // No data, return empty vec
+        }
+
+        // Use BTreeMap to store aggregated data per day (NaiveDate -> aggregated value)
+        // BTreeMap keeps keys (dates) sorted automatically.
+        let mut daily_aggregated_data: BTreeMap<NaiveDate, f64> = BTreeMap::new();
+
+        for w in history {
+            let date = w.timestamp.date_naive();
+
+            match graph_type {
+                GraphType::Estimated1RM => {
+                    if let (Some(weight), Some(reps)) = (w.weight, w.reps) {
+                        if let Some(e1rm) = calculate_e1rm(weight, reps) {
+                            let current_max = daily_aggregated_data.entry(date).or_insert(0.0);
+                            *current_max = current_max.max(e1rm); // Keep the max E1RM for the day
+                        }
+                    }
+                }
+                GraphType::MaxWeight => {
+                    if let Some(weight) = w.weight.filter(|&wg| wg > 0.0) {
+                        let current_max = daily_aggregated_data.entry(date).or_insert(0.0);
+                        *current_max = current_max.max(weight); // Keep the max weight for the day
+                    }
+                }
+                GraphType::MaxReps => {
+                    // Keep the max reps *in a single set* for the day
+                    if let Some(reps) = w.reps.filter(|&r| r > 0) {
+                        let current_max = daily_aggregated_data.entry(date).or_insert(0.0);
+                        *current_max = current_max.max(reps as f64);
+                    }
+                }
+                GraphType::WorkoutVolume => {
+                    // Sum the volume (sets * reps * weight) for the day
+                    let sets = w.sets.unwrap_or(1).max(1); // Assume at least 1 set
+                    let reps = w.reps.unwrap_or(0);
+                    let weight = w.weight.unwrap_or(0.0);
+                    let volume = sets as f64 * reps as f64 * weight;
+                    if volume > 0.0 {
+                        *daily_aggregated_data.entry(date).or_insert(0.0) += volume;
+                    }
+                }
+                GraphType::WorkoutReps => {
+                    // Sum the total reps (sets * reps) for the day
+                    let sets = w.sets.unwrap_or(1).max(1);
+                    let reps = w.reps.unwrap_or(0);
+                    let total_reps = sets * reps;
+                    if total_reps > 0 {
+                        *daily_aggregated_data.entry(date).or_insert(0.0) += total_reps as f64;
+                    }
+                }
+                GraphType::WorkoutDuration => {
+                    // Sum the duration for the day
+                    if let Some(duration) = w.duration_minutes.filter(|&d| d > 0) {
+                        *daily_aggregated_data.entry(date).or_insert(0.0) += duration as f64;
+                    }
+                }
+                GraphType::WorkoutDistance => {
+                    // Sum the distance (in km) for the day
+                    if let Some(distance_km) = w.distance.filter(|&d| d > 0.0) {
+                        *daily_aggregated_data.entry(date).or_insert(0.0) += distance_km;
+                    }
+                }
+            }
+        }
+
+        // Find the first day with data to calculate relative days
+        let first_day_ce = match daily_aggregated_data.keys().next() {
+            Some(first_date) => first_date.num_days_from_ce(),
+            None => return Ok(vec![]), // Should not happen if history wasn't empty, but handle defensively
+        };
+
+        // Convert the aggregated map to the final Vec<(f64, f64)> format
+        let data_points: Vec<(f64, f64)> = daily_aggregated_data
+            .into_iter()
+            .map(|(date, value)| {
+                let days_since_first = (date.num_days_from_ce() - first_day_ce) as f64;
+
+                // Apply final unit conversion only for distance
+                let final_value = if graph_type == GraphType::WorkoutDistance {
+                    match self.config.units {
+                        Units::Metric => value,              // Value is already km sum
+                        Units::Imperial => value * 0.621371, // Convert km sum to miles
+                    }
+                } else {
+                    value // Other types don't need unit conversion here
+                };
+
+                (days_since_first, final_value)
+            })
+            // Filter out potential zero values that might remain if only zero-value workouts existed for a day
+            // For volume/reps/duration/distance sums, this is fine.
+            // For MaxWeight/MaxReps/E1RM, the `.filter()` earlier should prevent zeros unless the max *was* technically 0 (unlikely for valid data).
+            .filter(|&(_, y)| y > 0.0) // Only include days where the aggregated metric is > 0
+            .collect();
+
+        Ok(data_points)
+    }
+}
+
+fn calculate_e1rm(weight: f64, reps: i64) -> Option<f64> {
+    if reps > 0 && weight > 0.0 {
+        // Ensure reps is converted to f64 for the division
+        let e1rm = weight * (1.0 + (reps as f64 / 30.0));
+        Some(e1rm)
+    } else {
+        // Cannot calculate E1RM for non-positive reps or weight
+        None
     }
 }

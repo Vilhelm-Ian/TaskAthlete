@@ -4,7 +4,8 @@ use rusqlite::Connection;
 use std::thread; // For adding delays in PB tests
 use std::time::Duration as StdDuration; // For delays
 use task_athlete_lib::{
-    AppService, Config, ConfigError, DbError, ExerciseType, Units, VolumeFilters, WorkoutFilters,
+    AppService, Config, ConfigError, DbError, ExerciseType, GraphType, Units, VolumeFilters,
+    WorkoutFilters,
 }; // For mutable connection helper
 
 // Helper function to create a test service with in-memory database
@@ -1708,5 +1709,201 @@ fn get_all_dates_exercised() -> Result<()> {
     )?;
     let dates = service.get_all_dates_with_exercise()?;
     assert_eq!(dates.len(), 2);
+    Ok(())
+}
+
+#[test]
+fn test_graph_data_fetching() -> Result<()> {
+    let mut service = create_test_service()?;
+    let day1 = NaiveDate::from_ymd_opt(2023, 10, 26).unwrap();
+    let day2 = NaiveDate::from_ymd_opt(2023, 10, 27).unwrap(); // Add multiple entries day 2
+    let day3 = NaiveDate::from_ymd_opt(2023, 10, 28).unwrap();
+
+    service.create_exercise("Bench Press", ExerciseType::Resistance, Some("chest"))?;
+    service.create_exercise("Running", ExerciseType::Cardio, Some("legs"))?;
+
+    // Add Bench Press data
+    service.add_workout(
+        "Bench Press",
+        day1,
+        Some(3),
+        Some(10),
+        Some(100.0),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )?; // E1RM ~133.3, Vol=3000, Reps=30
+    service.add_workout(
+        "Bench Press",
+        day2,
+        Some(4),
+        Some(8),
+        Some(105.0),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )?; // E1RM ~133.0, Vol=3360, Reps=32
+    service.add_workout(
+        "Bench Press",
+        day2,
+        Some(1),
+        Some(6),
+        Some(110.0),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )?; // E1RM ~132.0, Vol=660, Reps=6 -- Max E1RM for day2 is 133.0
+    service.add_workout(
+        "Bench Press",
+        day3,
+        Some(2),
+        Some(5),
+        Some(110.0),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )?; // E1RM ~128.3, Vol=1100, Reps=10
+
+    // Add Running data
+    service.add_workout(
+        "Running",
+        day2,
+        None,
+        None,
+        None,
+        Some(30),
+        Some(5.0),
+        None,
+        None,
+        None,
+        None,
+    )?;
+    service.add_workout(
+        "Running",
+        day2,
+        None,
+        None,
+        None,
+        Some(10),
+        Some(2.0),
+        None,
+        None,
+        None,
+        None,
+    )?; // Shorter run same day
+    service.add_workout(
+        "Running",
+        day3,
+        None,
+        None,
+        None,
+        Some(35),
+        Some(5.5),
+        None,
+        None,
+        None,
+        None,
+    )?;
+
+    // Test E1RM
+    let e1rm_data = service.get_data_for_graph("Bench Press", GraphType::Estimated1RM)?;
+    // Expected: One point per day with the MAX E1RM for that day
+    assert_eq!(e1rm_data.len(), 3);
+    assert_eq!(e1rm_data[0].0, 0.0); // Day 1 relative
+    assert!((e1rm_data[0].1 - 133.33).abs() < 0.1);
+    assert_eq!(e1rm_data[1].0, 1.0); // Day 2 relative - Max E1RM was 133.0
+    assert!((e1rm_data[1].1 - 133.0).abs() < 0.1);
+    assert_eq!(e1rm_data[2].0, 2.0); // Day 3 relative
+    assert!((e1rm_data[2].1 - 128.33).abs() < 0.1);
+
+    // Test Max Weight (should be actual weight used)
+    let weight_data = service.get_data_for_graph("Bench Press", GraphType::MaxWeight)?;
+    assert_eq!(weight_data.len(), 3);
+    assert_eq!(weight_data[0].0, 0.0); // Day 1
+    assert_eq!(weight_data[0].1, 100.0);
+    assert_eq!(weight_data[1].0, 1.0); // Day 2 - Max weight was 110.0
+    assert_eq!(weight_data[1].1, 110.0);
+    assert_eq!(weight_data[2].0, 2.0); // Day 3
+    assert_eq!(weight_data[2].1, 110.0);
+
+    // Test Max Reps
+    let reps_data = service.get_data_for_graph("Bench Press", GraphType::MaxReps)?;
+    // Expected: One point per day with MAX reps from any set that day
+    assert_eq!(reps_data.len(), 3);
+    assert_eq!(reps_data[0].0, 0.0); // Day 1
+    assert_eq!(reps_data[0].1, 10.0);
+    assert_eq!(reps_data[1].0, 1.0); // Day 2 - Max reps was 8
+    assert_eq!(reps_data[1].1, 8.0);
+    assert_eq!(reps_data[2].0, 2.0); // Day 3
+    assert_eq!(reps_data[2].1, 5.0);
+
+    // Test Workout Volume
+    let volume_data = service.get_data_for_graph("Bench Press", GraphType::WorkoutVolume)?;
+    // Expected: One point per day with SUM of volume for that day
+    assert_eq!(volume_data.len(), 3);
+    assert_eq!(volume_data[0].0, 0.0); // Day 1: 3000
+    assert!((volume_data[0].1 - 3000.0).abs() < 0.1);
+    assert_eq!(volume_data[1].0, 1.0); // Day 2: 3360 + 660 = 4020
+    assert!((volume_data[1].1 - 4020.0).abs() < 0.1);
+    assert_eq!(volume_data[2].0, 2.0); // Day 3: 1100
+    assert!((volume_data[2].1 - 1100.0).abs() < 0.1);
+
+    // Test Workout Reps (Total reps for the day: sets * reps)
+    let workout_reps_data = service.get_data_for_graph("Bench Press", GraphType::WorkoutReps)?;
+    // Expected: One point per day with SUM of total reps for that day
+    assert_eq!(workout_reps_data.len(), 3);
+    assert_eq!(workout_reps_data[0].0, 0.0); // Day 1: 3*10 = 30
+    assert_eq!(workout_reps_data[0].1, 30.0);
+    assert_eq!(workout_reps_data[1].0, 1.0); // Day 2: (4*8) + (1*6) = 32 + 6 = 38
+    assert_eq!(workout_reps_data[1].1, 38.0);
+    assert_eq!(workout_reps_data[2].0, 2.0); // Day 3: 2*5 = 10
+    assert_eq!(workout_reps_data[2].1, 10.0);
+
+    // Test Workout Duration (Running)
+    let duration_data = service.get_data_for_graph("Running", GraphType::WorkoutDuration)?;
+    // Expected: One point per day with MAX duration for that day
+    assert_eq!(duration_data.len(), 2);
+    assert_eq!(duration_data[0].0, 0.0); // Day 2 relative to first running workout
+    assert_eq!(duration_data[0].1, 40.0);
+    assert_eq!(duration_data[1].0, 1.0); // Day 3 relative (only one entry)
+    assert_eq!(duration_data[1].1, 35.0);
+
+    // Test Workout Distance (Running - Metric)
+    let distance_data_metric = service.get_data_for_graph("Running", GraphType::WorkoutDistance)?;
+    // Expected: One point per day with MAX distance for that day
+    assert_eq!(distance_data_metric.len(), 2);
+    assert_eq!(distance_data_metric[0].0, 0.0); // Day 2 relative
+    assert_eq!(distance_data_metric[0].1, 7.0); // km
+    assert_eq!(distance_data_metric[1].0, 1.0); // Day 3 relative
+    assert_eq!(distance_data_metric[1].1, 5.5); // km
+
+    // Test Workout Distance (Running - Imperial)
+    service.config.units = Units::Imperial;
+    let distance_data_imperial =
+        service.get_data_for_graph("Running", GraphType::WorkoutDistance)?;
+    // Expected: One point per day with MAX distance for that day (converted to miles)
+    assert_eq!(distance_data_imperial.len(), 2);
+    assert_eq!(distance_data_imperial[0].0, 0.0); // Day 2 relative
+    assert!((distance_data_imperial[0].1 - (7.0 * 0.621371)).abs() < 0.01); // miles
+    assert_eq!(distance_data_imperial[1].0, 1.0); // Day 3 relative
+    assert!((distance_data_imperial[1].1 - (5.5 * 0.621371)).abs() < 0.01); // miles
+
+    // Test for exercise with no data
+    service.create_exercise("Untouched", ExerciseType::Resistance, None)?;
+    let no_data = service.get_data_for_graph("Untouched", GraphType::MaxWeight)?;
+    assert!(no_data.is_empty());
+
     Ok(())
 }

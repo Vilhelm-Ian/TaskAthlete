@@ -89,7 +89,37 @@ impl App {
                 KeyCode::Tab => self.log_focus = LogFocus::SetList,
                 KeyCode::Char('a') => self.open_add_workout_modal()?,
                 KeyCode::Char('c') => self.open_create_exercise_modal()?, // NEW: Open create modal
-                KeyCode::Char('g') => { /* TODO */ }
+                KeyCode::Char('g') => {
+                    // Navigate to Graphs tab with selected exercise
+                    if let Some(selected_index) = self.log_exercise_list_state.selected() {
+                        if let Some(selected_exercise_name) =
+                            self.log_exercises_today.get(selected_index)
+                        {
+                            // Find the index of this exercise in the graphs list
+                            if let Some(graph_index) = self
+                                .graph_exercises_all
+                                .iter()
+                                .position(|name| name == selected_exercise_name)
+                            {
+                                // Set the selected exercise for the graph tab
+                                self.graph_selected_exercise = Some(selected_exercise_name.clone());
+                                // Update the graph list state
+                                self.graph_exercise_list_state.select(Some(graph_index));
+                                // Update graph data (will use selected exercise and potentially current/default type)
+                                self.update_graph_data();
+                                // Switch tab
+                                self.active_tab = ActiveTab::Graphs;
+                                // Set focus to the graph type list
+                                self.graph_focus = GraphsFocus::GraphTypeList;
+                            } else {
+                                // Handle case where exercise exists in log but not in graph list (should ideally not happen if lists are synced)
+                                self.set_error(
+                                    "Selected exercise not found in graph list.".to_string(),
+                                );
+                            }
+                        }
+                    }
+                }
                 KeyCode::Char('h') | KeyCode::Left => log_change_date(self, -1),
                 KeyCode::Char('l') | KeyCode::Right => log_change_date(self, 1),
                 KeyCode::Char('H') => log_set_previous_exercised_date(self)?,
@@ -106,6 +136,8 @@ impl App {
                 } // DELETE
                 KeyCode::Char('h') | KeyCode::Left => log_change_date(self, -1),
                 KeyCode::Char('l') | KeyCode::Right => log_change_date(self, 1),
+                KeyCode::Char('H') => log_set_previous_exercised_date(self)?,
+                KeyCode::Char('L') => log_set_next_exercised_date(self)?,
                 _ => {}
             },
         }

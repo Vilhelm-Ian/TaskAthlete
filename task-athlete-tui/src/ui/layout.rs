@@ -1,6 +1,8 @@
 use crate::{
     app::{ActiveTab, App}, // Use App from crate::app
-    ui::{bodyweight_tab, graphs_tab, log_tab, modals, placeholders, status_bar, tabs},
+    ui::{
+        bodyweight_tab, graphs_tab, history_tab, log_tab, modals, placeholders, status_bar, tabs,
+    },
 };
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -42,7 +44,7 @@ fn render_main_content(f: &mut Frame, app: &mut App, area: Rect) {
 
     match app.active_tab {
         ActiveTab::Log => log_tab::render(f, app, content_area),
-        ActiveTab::History => placeholders::render(f, "History Tab", content_area),
+        ActiveTab::History => history_tab::render(f, app, content_area),
         ActiveTab::Graphs => graphs_tab::render(f, app, content_area),
         ActiveTab::Bodyweight => bodyweight_tab::render(f, app, content_area),
     }

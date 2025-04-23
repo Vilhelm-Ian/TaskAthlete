@@ -1,4 +1,4 @@
-use super::state::App;
+use super::{navigation_helpers, state::App};
 use task_athlete_lib::WorkoutFilters; // Keep lib imports
 
 // --- Log Tab Navigation ---
@@ -105,4 +105,14 @@ pub fn bw_table_previous(app: &mut App) {
         None => list_len.saturating_sub(1),
     };
     app.bw_history_state.select(Some(i));
+}
+
+// --- History Tab Navigation ---
+
+pub fn history_list_next(app: &mut App) {
+    navigation_helpers::list_next(&mut app.history_list_state, app.history_data.len());
+}
+
+pub fn history_list_previous(app: &mut App) {
+    navigation_helpers::list_previous(&mut app.history_list_state, app.history_data.len());
 }

@@ -10,12 +10,12 @@ use super::{
         handle_set_target_weight_modal_input,
     },
     navigation::{
-        bw_table_next, bw_table_previous, log_list_next, log_list_previous, log_table_next,
-        log_table_previous,
+        bw_table_next, bw_table_previous, history_list_next, history_list_previous, log_list_next,
+        log_list_previous, log_table_next, log_table_previous,
     },
     state::{
-        ActiveModal, ActiveTab, App, BodyweightFocus, GraphsFocus, LogBodyweightField, LogFocus,
-        SetTargetWeightField,
+        ActiveModal, ActiveTab, App, BodyweightFocus, GraphsFocus, HistoryFocus,
+        LogBodyweightField, LogFocus, SetTargetWeightField,
     },
 };
 use anyhow::Result;
@@ -145,7 +145,27 @@ impl App {
     }
 
     fn handle_history_input(&mut self, _key: KeyEvent) -> Result<()> {
-        // TODO
+        match self.history_focus {
+            HistoryFocus::DayList => match _key.code {
+                KeyCode::Char('k') | KeyCode::Up => history_list_previous(self),
+                KeyCode::Char('j') | KeyCode::Down => history_list_next(self),
+                KeyCode::Char('l') => {
+                    // Navigate to Log tab for selected date
+                    if let Some(selected_index) = self.history_list_state.selected() {
+                        if let Some((date, _)) = self.history_data.get(selected_index) {
+                            self.active_tab = ActiveTab::Log;
+                            self.log_viewed_date = *date;
+                            // Reset log focus/selection for the new date
+                            self.log_focus = LogFocus::ExerciseList;
+                            self.log_exercise_list_state.select(Some(0)); // Select first exercise if any
+                            self.log_set_table_state.select(Some(0)); // Select first set if any
+                                                                      // Log data will refresh automatically in the main loop
+                        }
+                    }
+                }
+                _ => {}
+            },
+        }
         Ok(())
     }
 

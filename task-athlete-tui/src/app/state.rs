@@ -1,8 +1,11 @@
 //src/app/state.rs
 // task-athlete-tui/src/app/state.rs
 // Use error from parent mod
-use chrono::Utc;
-use ratatui::widgets::{ListState, TableState};
+use chrono::{NaiveDate, Utc};
+use ratatui::{
+    text::Line,
+    widgets::{ListState, TableState},
+};
 use std::time::Instant;
 use task_athlete_lib::{
     AppService, ExerciseDefinition, ExerciseType, GraphType, Workout, WorkoutFilters,
@@ -78,6 +81,11 @@ pub enum GraphsFocus {
     ExerciseList,
     GraphTypeList,
     History,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HistoryFocus {
+    DayList, // The main list showing days
 }
 
 // Represents the state of active modals
@@ -168,7 +176,10 @@ pub struct App {
     pub log_set_table_state: TableState,
 
     // === History Tab State ===
-    // TODO
+    pub history_focus: HistoryFocus,
+    pub history_data: Vec<(NaiveDate, Vec<Workout>)>, // Date and workouts for that date
+    pub history_rendered_lines: Vec<Line<'static>>,   // Pre-rendered lines for scrolling
+    pub history_list_state: ListState,                // Selects which *day* is focused
 
     // === Graph Tab State ===
     pub graph_focus: GraphsFocus,
@@ -210,6 +221,11 @@ impl App {
             log_exercise_list_state: ListState::default(),
             log_sets_for_selected_exercise: Vec::new(),
             log_set_table_state: TableState::default(),
+            // --- History Tab State ---
+            history_focus: HistoryFocus::DayList,
+            history_data: Vec::new(),
+            history_rendered_lines: Vec::new(),
+            history_list_state: ListState::default(),
             // --- Graphs Tab State (Initialize here) ---
             graph_focus: GraphsFocus::ExerciseList, // Start focus on exercise list
             graph_exercises_all: exercises_names,
@@ -251,6 +267,7 @@ impl App {
         app.graph_exercise_list_state.select(Some(0)); // Select first item if list non-empty
         app.graph_type_list_state.select(Some(0)); // Select first item if list non-empty
                                                    // Initial data load is now called explicitly in main loop or where needed
+        app.history_list_state.select(Some(0));
         app
     }
 

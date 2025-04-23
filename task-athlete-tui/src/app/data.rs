@@ -1,6 +1,14 @@
 use super::state::App;
 use anyhow::{anyhow, Result};
 use chrono::{Datelike, Duration, NaiveDate, Utc};
+use ratatui::text::{Line, Span}; // Import Line, Span
+use ratatui::{
+    layout::Constraint,
+    style::{Modifier, Style, Stylize},
+    symbols,
+};
+use std::collections::HashMap;
+use task_athlete_lib::Units;
 use task_athlete_lib::{AppService, DbError, GraphType as LibGraphType, Workout, WorkoutFilters};
 
 // Make refresh logic methods on App
@@ -11,8 +19,8 @@ impl App {
 
         match self.active_tab {
             super::state::ActiveTab::Log => self.refresh_log_data(),
-            super::state::ActiveTab::History => {} // TODO
-            super::state::ActiveTab::Graphs => {}  // TODO
+            super::state::ActiveTab::History => self.refresh_history_data(),
+            super::state::ActiveTab::Graphs => {} // TODO
             super::state::ActiveTab::Bodyweight => self.refresh_bodyweight_data(),
         }
     }
@@ -297,6 +305,66 @@ impl App {
         self.graph_x_bounds = [0.0, 1.0];
         self.graph_y_bounds = [0.0, 1.0];
     }
+    // --- History Tab Data ---
+    fn refresh_history_data(&mut self) {
+        // Fetch *all* workouts (might be inefficient for very large histories)
+        let filters = WorkoutFilters {
+            ..Default::default()
+        };
+        match self.service.list_workouts(filters) {
+            Ok(all_workouts) => {
+                if all_workouts.is_empty() {
+                    self.history_data.clear();
+                    self.history_list_state.select(None); // Ensure selection is None if empty
+                    return;
+                }
+
+                // Group workouts by date
+                let mut grouped: HashMap<NaiveDate, Vec<Workout>> = HashMap::new();
+                for workout in all_workouts {
+                    grouped
+                        .entry(workout.timestamp.date_naive())
+                        .or_default()
+                        .push(workout);
+                }
+
+                // Sort workouts within each day (optional, depends on service order)
+                for workouts in grouped.values_mut() {
+                    workouts.sort_by_key(|w| w.timestamp); // Or by id
+                }
+
+                // Convert to Vec and sort by date descending
+                let mut sorted_history: Vec<(NaiveDate, Vec<Workout>)> =
+                    grouped.into_iter().collect();
+                sorted_history.sort_unstable_by_key(|(date, _)| *date);
+                sorted_history.reverse(); // Show most recent first
+
+                let old_data_len = self.history_data.len();
+                self.history_data = sorted_history;
+                let new_data_len = self.history_data.len();
+
+                // Ensure selection is valid after data update
+                // If lengths are same, keep selection. If different, select first valid.
+                if old_data_len != new_data_len {
+                    super::navigation_helpers::ensure_selection_is_valid(
+                        &mut self.history_list_state,
+                        new_data_len,
+                    );
+                } else if self.history_list_state.selected().unwrap_or(0) >= new_data_len
+                    && new_data_len > 0
+                {
+                    self.history_list_state.select(Some(new_data_len - 1));
+                } else if self.history_list_state.selected().is_none() && new_data_len > 0 {
+                    self.history_list_state.select(Some(0));
+                }
+            }
+            Err(e) => {
+                self.set_error(format!("Error fetching history data: {}", e));
+                self.history_data.clear(); // Clear data on error
+                self.history_list_state.select(None);
+            }
+        }
+    }
 }
 
 // Function needs to be associated with App or take &mut App
@@ -378,4 +446,48 @@ pub fn log_set_next_exercised_date(app: &mut App) -> Result<()> {
         }
     }
     Ok(())
+}
+
+pub fn format_date_with_ordinal(date: NaiveDate) -> String {
+    let day = date.day();
+    let suffix = match day {
+        1 | 21 | 31 => "st",
+        2 | 22 => "nd",
+        3 | 23 => "rd",
+        _ => "th",
+    };
+    // Format like "Saturday 12th April 2025"
+    date.format(&format!("%A %-d{} %B %Y", suffix)).to_string()
+}
+
+/// Formats a single workout set line for the history view
+pub fn format_set_line(workout: &Workout, units: Units) -> String {
+    let mut parts = Vec::new();
+    if let Some(reps) = workout.reps {
+        parts.push(format!("{} reps", reps));
+    }
+    if let Some(weight_kg) = workout.weight {
+        let (display_weight, unit_str) = match units {
+            Units::Metric => (weight_kg, "kg"),
+            Units::Imperial => (weight_kg * 2.20462, "lbs"),
+        };
+        parts.push(format!("{:.1} {}", display_weight, unit_str));
+    }
+    if let Some(duration) = workout.duration_minutes {
+        parts.push(format!("{} min", duration));
+    }
+    if let Some(dist_km) = workout.distance {
+        let (display_dist, unit_str) = match units {
+            Units::Metric => (dist_km, "km"),
+            Units::Imperial => (dist_km * 0.621_371, "mi"),
+        };
+        parts.push(format!("{:.1} {}", display_dist, unit_str));
+    }
+    if let Some(notes) = &workout.notes {
+        if !notes.trim().is_empty() {
+            parts.push(format!("({})", notes.trim()));
+        }
+    }
+
+    parts.join(" x ") // Join parts with " x " or choose another separator
 }

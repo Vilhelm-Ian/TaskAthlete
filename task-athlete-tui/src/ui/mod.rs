@@ -1,5 +1,6 @@
 mod bodyweight_tab;
 mod graphs_tab;
+mod history_tab;
 mod layout;
 mod log_tab;
 mod modals;

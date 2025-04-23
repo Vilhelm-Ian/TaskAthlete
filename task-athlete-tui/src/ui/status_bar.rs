@@ -12,7 +12,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
     let status_text = match &app.active_modal {
          ActiveModal::None => match app.active_tab {
              crate::app::ActiveTab::Log => "[Tab] Focus | [↑↓/jk] Nav | [←→/hl] Date | [a]dd | [l]og set | [e]dit | [d]elete | [g]raphs | [?] Help | [Q]uit ",
-             crate::app::ActiveTab::History => "[↑↓/jk] Nav | [/f] Filter | [e]dit | [d]elete | [?] Help | [Q]uit ",
+              crate::app::ActiveTab::History => "[↑↓/jk] Scroll Days | [?] Help | [Q]uit ",
              crate::app::ActiveTab::Bodyweight => "[↑↓/jk] Nav Hist | [l]og | [t]arget | [r]ange | [?] Help | [Q]uit ",
              crate::app::ActiveTab::Graphs => "[Tab] Focus | [↑↓/jk] Nav List | [Enter] Select | [?] Help | [Q]uit "
          }.to_string(),

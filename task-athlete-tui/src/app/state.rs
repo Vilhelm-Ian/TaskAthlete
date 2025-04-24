@@ -8,8 +8,9 @@ use ratatui::{
 };
 use std::time::Instant;
 use task_athlete_lib::{
-    AppService, ExerciseDefinition, ExerciseType, GraphType, Workout, WorkoutFilters,
+    AppService, ExerciseDefinition, ExerciseType, GraphType, PBInfo, Workout, WorkoutFilters,
 }; // Keep lib imports
+use thiserror::Error;
 
 // Represents the active UI tab
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -88,6 +89,11 @@ pub enum HistoryFocus {
     DayList, // The main list showing days
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PbModalField {
+    OkButton,
+}
+
 // Represents the state of active modals
 #[derive(Clone, Debug, PartialEq)]
 pub enum ActiveModal {
@@ -155,7 +161,11 @@ pub enum ActiveModal {
         body_weight_id: u64,
         set_index: usize, // For display purposes ("Delete set X of Y?")
     },
-    // Add more here
+    PersonalBest {
+        exercise_name: String,
+        pb_info: PBInfo, // Store the PB details
+        focused_field: PbModalField,
+    },
 }
 
 // Holds the application state

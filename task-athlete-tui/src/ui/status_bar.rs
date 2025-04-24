@@ -14,7 +14,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
              crate::app::ActiveTab::Log => "[Tab] Focus | [↑↓/jk] Nav | [←→/hl] Date | [a]dd | [l]og set | [e]dit | [d]elete | [g]raphs | [?] Help | [Q]uit ",
               crate::app::ActiveTab::History => "[↑↓/jk] Scroll Days | [?] Help | [Q]uit ",
              crate::app::ActiveTab::Bodyweight => "[↑↓/jk] Nav Hist | [l]og | [t]arget | [r]ange | [?] Help | [Q]uit ",
-             crate::app::ActiveTab::Graphs => "[Tab] Focus | [↑↓/jk] Nav List | [Enter] Select | [?] Help | [Q]uit "
+             crate::app::ActiveTab::Graphs => "[Tab] Focus | [↑↓/jk] Nav List | [Enter] Select | [?] Help | [Q]uit ",
          }.to_string(),
          ActiveModal::Help => " [Esc/Enter/?] Close Help ".to_string(),
          ActiveModal::LogBodyweight { .. } => " [Esc] Cancel | [Enter] Confirm | [Tab/↑↓] Navigate ".to_string(),
@@ -33,6 +33,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
              },
          ActiveModal::CreateExercise { .. } => " [Esc] Cancel | [Enter] Confirm/Next | [Tab/↑↓/←→] Navigate ".to_string(),
          ActiveModal::EditWorkout { .. } => " [Esc] Cancel | [Enter] Confirm/Next | [Tab/↑↓] Navigate ".to_string(),
+         ActiveModal::PersonalBest{ .. } => " [Esc] Cancel | [Enter] Confirm/Next | [Tab/↑↓] Navigate ".to_string(),
          ActiveModal::ConfirmDeleteWorkout {..} | ActiveModal::ConfirmDeleteBodyWeight  { .. } => " Confirm Deletion: [Y]es / [N]o (Esc) ".to_string(),
      };
 

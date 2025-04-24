@@ -108,3 +108,14 @@ where
         *input_str = num_val.to_string();
     }
 }
+
+pub fn parse_option_to_input<T>(option: Option<T>) -> String
+where
+    T: std::fmt::Display,
+{
+    if let Some(s) = option {
+        format!("{}", s)
+    } else {
+        String::new()
+    }
+}

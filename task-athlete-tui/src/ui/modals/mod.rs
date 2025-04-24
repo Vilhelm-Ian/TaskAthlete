@@ -23,6 +23,7 @@ pub fn render(f: &mut Frame, app: &App) {
         ActiveModal::CreateExercise { .. } => create_exercise::render_create_exercise_modal(f, app),
         ActiveModal::EditWorkout { .. } => workout::render_edit_workout_modal(f, app),
         ActiveModal::ConfirmDeleteWorkout { .. } => confirmation::render_confirmation_modal(f, app),
+        ActiveModal::PersonalBest { .. } => todo!(),
         ActiveModal::ConfirmDeleteBodyWeight { .. } => {
             confirmation::render_confirmation_bodyweight_modal(f, app);
         }

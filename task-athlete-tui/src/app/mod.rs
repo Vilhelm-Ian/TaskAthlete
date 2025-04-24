@@ -8,6 +8,7 @@ pub mod modals;
 pub mod navigation;
 pub mod navigation_helpers;
 pub mod state;
+pub mod utils;
 
 // Re-export the main App struct and other necessary types for convenience
 pub use state::{

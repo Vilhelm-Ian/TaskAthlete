@@ -1088,6 +1088,10 @@ impl AppService {
 
         Ok(data_points)
     }
+    pub fn list_all_muscles(&self) -> Result<Vec<String>> {
+        db::list_all_muscles(&self.conn)
+            .context("Failed to retrieve list of all muscles from the database")
+    }
 }
 
 fn calculate_e1rm(weight: f64, reps: i64) -> Option<f64> {

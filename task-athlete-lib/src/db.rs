@@ -3,6 +3,7 @@ use anyhow::{bail, Context, Result};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use rusqlite::{named_params, params, Connection, OptionalExtension, Row, ToSql}; // Import named_params
 use std::collections::HashMap; // For listing aliases
+use std::collections::HashSet;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -22,9 +23,9 @@ impl TryFrom<&str> for ExerciseType {
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         match value.to_lowercase().as_str() {
-            "resistance" => Ok(ExerciseType::Resistance),
-            "cardio" => Ok(ExerciseType::Cardio),
-            "body-weight" | "bodyweight" => Ok(ExerciseType::BodyWeight), // Allow variation
+            "resistance" => Ok(Self::Resistance),
+            "cardio" => Ok(Self::Cardio),
+            "body-weight" | "bodyweight" | "bw" => Ok(Self::BodyWeight), // Allow variation
             _ => anyhow::bail!("Invalid exercise type string from DB: {}", value),
         }
     }
@@ -1124,4 +1125,42 @@ pub fn get_all_dates_with_exercise(conn: &Connection) -> Result<Vec<NaiveDate>, 
     date_iter
         .collect::<Result<Vec<_>, _>>()
         .map_err(DbError::QueryFailed)
+}
+
+pub fn list_all_muscles(conn: &Connection) -> Result<Vec<String>, DbError> {
+    let mut stmt = conn
+        .prepare("SELECT muscles FROM exercises WHERE muscles IS NOT NULL AND muscles != ''")
+        .map_err(DbError::QueryFailed)?;
+
+    let muscle_csv_iter = stmt
+        .query_map([], |row| row.get::<_, String>(0)) // Get the 'muscles' string
+        .map_err(DbError::QueryFailed)?;
+
+    let mut unique_muscles: HashSet<String> = HashSet::new();
+
+    for muscle_csv_result in muscle_csv_iter {
+        match muscle_csv_result {
+            Ok(csv) => {
+                for part in csv.split(',') {
+                    let trimmed = part.trim();
+                    if !trimmed.is_empty() {
+                        // Convert to lowercase for case-insensitive uniqueness
+                        unique_muscles.insert(trimmed.to_lowercase());
+                    }
+                }
+            }
+            Err(e) => {
+                // Log or handle the error if needed, but continue processing others
+                eprintln!("Warning: Skipping row due to muscle fetch error: {}", e);
+                // Alternatively, could return the error immediately:
+                // return Err(DbError::QueryFailed(e));
+            }
+        }
+    }
+
+    // Convert HashSet to Vec and sort alphabetically
+    let mut sorted_muscles: Vec<String> = unique_muscles.into_iter().collect();
+    sorted_muscles.sort_unstable(); // Use unstable sort for potentially better performance
+
+    Ok(sorted_muscles)
 }

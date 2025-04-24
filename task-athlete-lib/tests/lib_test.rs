@@ -1907,3 +1907,53 @@ fn test_graph_data_fetching() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_list_all_muscles() -> Result<()> {
+    let service = create_test_service()?;
+
+    // No exercises yet
+    assert!(service.list_all_muscles()?.is_empty());
+
+    // Add exercises with various muscle strings
+    service.create_exercise(
+        "Bench Press",
+        ExerciseType::Resistance,
+        Some("Chest, Triceps"),
+    )?;
+    service.create_exercise(
+        "Squat",
+        ExerciseType::Resistance,
+        Some("Legs, Glutes, Core"),
+    )?;
+    service.create_exercise("Pull-ups", ExerciseType::BodyWeight, Some("back, Biceps "))?; // Extra space
+    service.create_exercise("Rows", ExerciseType::Resistance, Some("Back, Rear Delts"))?;
+    service.create_exercise("Running", ExerciseType::Cardio, Some("Legs"))?; // Duplicate 'legs'
+    service.create_exercise("Crunches", ExerciseType::BodyWeight, Some("core"))?; // Duplicate 'core', case difference
+    service.create_exercise("Empty Muscle", ExerciseType::Resistance, Some(""))?; // Empty string
+    service.create_exercise("Null Muscle", ExerciseType::Resistance, None)?; // Null value
+    service.create_exercise("Just Comma", ExerciseType::Resistance, Some(","))?; // Just a comma
+    service.create_exercise(
+        "Leading Comma",
+        ExerciseType::Resistance,
+        Some(",shoulders"),
+    )?;
+
+    let muscles = service.list_all_muscles()?;
+
+    let expected_muscles = vec![
+        "back",
+        "biceps",
+        "chest",
+        "core",
+        "glutes",
+        "legs",
+        "rear delts",
+        "shoulders",
+        "triceps",
+    ];
+
+    assert_eq!(muscles, expected_muscles);
+
+    Ok(())
+}

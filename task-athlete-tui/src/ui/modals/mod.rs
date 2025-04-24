@@ -3,6 +3,7 @@ mod create_exercise;
 mod help;
 mod helpers; // Keep helpers private to the modals module unless needed elsewhere
 mod log_bodyweight;
+mod pb_modal;
 mod set_target_weight;
 mod workout;
 
@@ -23,7 +24,7 @@ pub fn render(f: &mut Frame, app: &App) {
         ActiveModal::CreateExercise { .. } => create_exercise::render_create_exercise_modal(f, app),
         ActiveModal::EditWorkout { .. } => workout::render_edit_workout_modal(f, app),
         ActiveModal::ConfirmDeleteWorkout { .. } => confirmation::render_confirmation_modal(f, app),
-        ActiveModal::PersonalBest { .. } => todo!(),
+        ActiveModal::PersonalBest { .. } => pb_modal::render(f, app),
         ActiveModal::ConfirmDeleteBodyWeight { .. } => {
             confirmation::render_confirmation_bodyweight_modal(f, app);
         }

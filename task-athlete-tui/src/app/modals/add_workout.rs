@@ -10,7 +10,7 @@ use task_athlete_lib::{DbError, ExerciseDefinition, ExerciseType};
 
 // --- Submission Logic ---
 
-fn submit_add_workout(app: &mut App, modal_state: &ActiveModal) -> Result<(), AppInputError> {
+fn submit_add_workout(app: &mut App, modal_state: &ActiveModal) -> Result<bool, AppInputError> {
     if let ActiveModal::AddWorkout {
          exercise_input: _, // Use resolved_exercise name
          sets_input,
@@ -47,7 +47,6 @@ fn submit_add_workout(app: &mut App, modal_state: &ActiveModal) -> Result<(), Ap
             None
         };
 
-
         // 5. Call AppService
         match app.service.add_workout(
             canonical_name,
@@ -63,15 +62,14 @@ fn submit_add_workout(app: &mut App, modal_state: &ActiveModal) -> Result<(), Ap
             bodyweight_to_use, // Pass configured bodyweight if needed
         ) {
             Ok((_workout_id, pb_info)) => {
+                 let mut pb_modal_opened = false; // Initialize the flag
                  if let Some(pb) = pb_info {
-                    // Simple message if any PB achieved
                     if pb.any_pb() {
-                         // Using set_error might be confusing, maybe a different status method?
-                         // For now, use set_error for feedback.
-                         app.set_error("🎉 New Personal Best achieved!".to_string());
+                        app.open_pb_modal(canonical_name.to_string(), pb);
+                        pb_modal_opened = true; // Set the flag if PB modal was opened
                     }
                  }
-                Ok(()) // Signal success to close modal
+                 Ok(pb_modal_opened) // Return the flag indicating if PB modal was shown
             }
             Err(e) => {
                  // Convert service error to modal error
@@ -96,7 +94,7 @@ fn submit_add_workout(app: &mut App, modal_state: &ActiveModal) -> Result<(), Ap
 
 // Made public for re-export in mod.rs
 pub fn handle_add_workout_modal_input(app: &mut App, key: KeyEvent) -> Result<()> {
-    let mut submission_result: Result<(), AppInputError> = Ok(());
+    let mut submission_result: Result<bool, AppInputError> = Ok(false);
     let mut should_submit = false;
     let mut needs_suggestion_update = false;
     // Flag to indicate that workout fields should be repopulated
@@ -505,9 +503,11 @@ pub fn handle_add_workout_modal_input(app: &mut App, key: KeyEvent) -> Result<()
         }
 
         // --- Handle Submission Result ---
-        if submission_result.is_ok() {
-            app.active_modal = ActiveModal::None; // Close modal on success
-                                                  // Data refresh will happen in the main loop
+        if let Ok(result) = submission_result {
+            if !result {
+                app.active_modal = ActiveModal::None; // Close modal on success
+                                                      // Data refresh will happen in the main loop
+            }
         } else {
             // Re-borrow mutably ONLY if necessary to set error
             if let ActiveModal::AddWorkout {

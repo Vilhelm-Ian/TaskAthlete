@@ -6,7 +6,7 @@ use super::{
     modals::{
         handle_add_workout_modal_input, handle_confirm_delete_body_weigth_input,
         handle_confirm_delete_modal_input, handle_create_exercise_modal_input,
-        handle_edit_workout_modal_input, handle_log_bodyweight_modal_input,
+        handle_edit_workout_modal_input, handle_log_bodyweight_modal_input, handle_pb_modal_input,
         handle_set_target_weight_modal_input,
     },
     navigation::{
@@ -66,6 +66,7 @@ impl App {
             ActiveModal::AddWorkout { .. } => handle_add_workout_modal_input(self, key)?,
             ActiveModal::CreateExercise { .. } => handle_create_exercise_modal_input(self, key)?,
             ActiveModal::EditWorkout { .. } => handle_edit_workout_modal_input(self, key)?,
+            ActiveModal::PersonalBest { .. } => handle_pb_modal_input(self, key)?,
             ActiveModal::ConfirmDeleteWorkout { .. } => {
                 handle_confirm_delete_modal_input(self, key)?;
             }

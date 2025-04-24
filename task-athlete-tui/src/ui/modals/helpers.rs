@@ -160,3 +160,19 @@ pub(super) fn render_exercise_suggestions_popup(
     let mut state = list_state.clone(); // Clone for rendering
     f.render_stateful_widget(suggestions_list, popup_area, &mut state);
 }
+
+/// Renders a single centered button.
+pub(super) fn render_button(f: &mut Frame, area: Rect, label: &str, is_focused: bool) {
+    let base_style = Style::default().fg(Color::White);
+    let style = if is_focused {
+        base_style.reversed()
+    } else {
+        base_style
+    };
+    f.render_widget(
+        Paragraph::new(format!(" {label} "))
+            .alignment(ratatui::layout::Alignment::Center)
+            .style(style),
+        area,
+    );
+}

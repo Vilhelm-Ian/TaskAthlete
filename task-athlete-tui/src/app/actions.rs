@@ -315,22 +315,12 @@ impl App {
         Ok(())
     }
 
-    // Helper specifically for getting the workout being edited
-    pub fn get_workout_by_id(&self, workout_id: &str) -> Option<Workout> {
-        // We could query the service, but if the workout is already loaded in the log tab,
-        // it might be faster to find it there. This assumes the ID is present in the loaded data.
-        // This is potentially fragile if the log data isn't comprehensive.
-        // A safer approach is to always query the service.
-        let filters = WorkoutFilters {
-            exercise_name: Some(workout_id),
-            ..Default::default()
+    pub fn open_pb_modal(&mut self, exercise_name: String, pb_info: task_athlete_lib::PBInfo) {
+        self.active_modal = ActiveModal::PersonalBest {
+            exercise_name,
+            pb_info,
+            focused_field: super::state::PbModalField::OkButton,
         };
-        match self.service.list_workouts(filters) {
-            Ok(mut workouts) if !workouts.is_empty() => workouts.pop(),
-            _ => None, // Workout not found or error
-        }
-        // Alternative: Search in existing log_sets_for_selected_exercise
-        // self.log_sets_for_selected_exercise.iter().find(|w| w.id == workout_id).cloned()
     }
 
     fn get_data_for_workout_modal(

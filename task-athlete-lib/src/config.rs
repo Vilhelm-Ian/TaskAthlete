@@ -1,7 +1,8 @@
-//src/config.rs
+// src/config.rs
 use anyhow::Result;
 use comfy_table::Color;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 use strum::IntoEnumIterator;
@@ -13,7 +14,7 @@ const APP_CONFIG_DIR: &str = "workout-tracker-cli";
 const CONFIG_ENV_VAR: &str = "WORKOUT_CONFIG_DIR"; // Environment variable name
 
 #[derive(Error, Debug)]
-pub enum Error {
+pub enum ConfigError {
     #[error("Could not determine configuration directory.")]
     CannotDetermineConfigDir,
     #[error("I/O error accessing config file: {0}")]
@@ -31,12 +32,13 @@ pub enum Error {
     #[error("Invalid bodyweight input: {0}")]
     InvalidBodyweightInput(String),
     #[error("Personal best notification setting not configured. Please enable/disable using 'set-pb-notification true|false'.")]
-    // Feature 4
     PbNotificationNotSet,
-    #[error("Personal best notification prompt cancelled by user.")] // Feature 4
+    #[error("Personal best notification prompt cancelled by user.")]
     PbNotificationPromptCancelled,
-    #[error("Invalid input for PB notification prompt: {0}")] // Feature 4
+    #[error("Invalid input for PB notification prompt: {0}")]
     InvalidPbNotificationInput(String),
+    #[error("Invalid streak interval: {0}. Must be at least 1.")]
+    InvalidStreakInterval(u32),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -68,6 +70,13 @@ pub enum StandardColor {
     Grey,
 }
 
+impl fmt::Display for StandardColor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Use the debug format which matches the expected parsing format
+        write!(f, "{self:?}")
+    }
+}
+
 // Helper to convert our enum to comfy_table::Color
 impl From<StandardColor> for Color {
     fn from(value: StandardColor) -> Self {
@@ -92,14 +101,20 @@ impl From<StandardColor> for Color {
     }
 }
 
-// Helper to parse a string into our StandardColor enum
-pub fn parse_color(color_str: &str) -> Result<StandardColor, Error> {
+/// Parses a string into a `StandardColor`.
+///
+/// The parsing is case-insensitive.
+///
+/// # Errors
+///
+/// Returns `ConfigError::InvalidColor` if the input string does not match any `StandardColor` variant name.
+pub fn parse_color(color_str: &str) -> Result<StandardColor, ConfigError> {
     for color in StandardColor::iter() {
-        if format!("{:?}", color).eq_ignore_ascii_case(color_str) {
+        if format!("{color:?}").eq_ignore_ascii_case(color_str) {
             return Ok(color);
         }
     }
-    Err(Error::InvalidColor(color_str.to_string()))
+    Err(ConfigError::InvalidColor(color_str.to_string()))
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -110,30 +125,44 @@ pub struct Theme {
 
 impl Default for Theme {
     fn default() -> Self {
-        Theme {
+        Self {
             header_color: "Green".to_string(),
         }
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)] // Removed Default derive
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(default)] // Ensure defaults are used if fields are missing
+pub struct PbNotificationConfig {
+    pub enabled: Option<bool>, // None = prompt first time, Some(true/false) = user setting
+    pub notify_weight: bool,
+    pub notify_reps: bool,
+    pub notify_duration: bool,
+    pub notify_distance: bool,
+}
+
+impl Default for PbNotificationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: None, // Default to None, so user is prompted first time
+            notify_weight: true,
+            notify_reps: true,
+            notify_duration: true,
+            notify_distance: true,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default)] // Ensure defaults are used if fields are missing
 pub struct Config {
     pub bodyweight: Option<f64>,
     pub units: Units,
     pub prompt_for_bodyweight: bool, // Default is true
     pub streak_interval_days: u32,   // Default 1
-
-    // PB Notification Settings
-    pub notify_pb_enabled: Option<bool>, // None = prompt first time, Some(true/false) = user setting
-    pub notify_pb_weight: bool,
-    pub notify_pb_reps: bool,
-    pub notify_pb_duration: bool,
-    pub notify_pb_distance: bool,
     pub target_bodyweight: Option<f64>,
-
-    // Theming
     pub theme: Theme,
+    pub pb_notifications: PbNotificationConfig, // Grouped PB settings
 }
 
 // Implement Default for Config manually to set defaults correctly
@@ -144,42 +173,41 @@ impl Default for Config {
             units: Units::default(),
             prompt_for_bodyweight: true, // Explicitly true by default
             streak_interval_days: 1,     // Default to daily streaks
-            notify_pb_enabled: None,     // Default to None, so user is prompted first time
-            notify_pb_weight: true,      // Default to true
-            notify_pb_reps: true,        // Default to true
-            notify_pb_duration: true,    // Default to true
-            notify_pb_distance: true,    // Default to true
             target_bodyweight: None,
             theme: Theme::default(),
+            pb_notifications: PbNotificationConfig::default(), // Use nested default
         }
     }
 }
 
-impl Config {
-    // Helper to create a new instance with defaults
-    fn new_default() -> Self {
-        Self::default()
-    }
-}
-
 /// Determines the path to the configuration file.
-/// Exposed at crate root as get_config_path_util
-pub fn get_config_path() -> Result<PathBuf, Error> {
+///
+/// It prioritizes the path specified by the `WORKOUT_CONFIG_DIR` environment variable.
+/// If the variable is not set or invalid, it falls back to the standard configuration directory
+/// (`~/.config/workout-tracker-cli/config.toml` on Linux).
+/// If the directory doesn't exist, it attempts to create it.
+///
+/// Exposed at crate root as `get_config_path_util`.
+///
+/// # Errors
+///
+/// - `ConfigError::CannotDetermineConfigDir`: If the base configuration directory cannot be found (e.g., on unsupported platforms).
+/// - `ConfigError::Io`: If there's an I/O error creating the configuration directory.
+pub fn get_config_path() -> Result<PathBuf, ConfigError> {
     let config_dir_override = std::env::var(CONFIG_ENV_VAR).ok();
 
     let config_dir_path = if let Some(path_str) = config_dir_override {
         let path = PathBuf::from(path_str);
         if !path.is_dir() {
-            eprintln!( // Keep warning, as it's about env var setup
-                    "Warning: Environment variable {} points to '{}', which is not a directory. Trying to create it.",
-                    CONFIG_ENV_VAR,
+            eprintln!(
+                    "Warning: Environment variable {CONFIG_ENV_VAR} points to '{}', which is not a directory. Trying to create it.",
                     path.display()
                  );
             fs::create_dir_all(&path)?;
         }
         path
     } else {
-        let base_config_dir = dirs::config_dir().ok_or(Error::CannotDetermineConfigDir)?;
+        let base_config_dir = dirs::config_dir().ok_or(ConfigError::CannotDetermineConfigDir)?;
         base_config_dir.join(APP_CONFIG_DIR)
     };
 
@@ -191,31 +219,48 @@ pub fn get_config_path() -> Result<PathBuf, Error> {
 }
 
 /// Loads the configuration from the TOML file at the given path.
-/// Exposed at crate root as load_config_util
-pub fn load_config(config_path: &Path) -> Result<Config, Error> {
+///
+/// If the file doesn't exist, it creates a default configuration file and returns the default config.
+/// It uses `serde(default)` to handle missing fields gracefully when parsing an existing file.
+///
+/// Exposed at crate root as `load_config_util`.
+///
+/// # Errors
+///
+/// - `ConfigError::Io`: If there's an error reading the config file or writing the default config.
+/// - `ConfigError::TomlParse`: If the existing config file content is invalid TOML.
+/// - `ConfigError::TomlSerialize`: If the default config data cannot be serialized to TOML (should not happen).
+pub fn load(config_path: &Path) -> Result<Config, ConfigError> {
     if config_path.exists() {
         let config_content = fs::read_to_string(config_path)?;
         // Use serde(default) to handle missing fields when parsing
-        let config: Config = toml::from_str(&config_content).map_err(Error::TomlParse)?;
-        // No need to manually fill defaults here if using #[serde(default)] on struct and fields
+        let config: Config = toml::from_str(&config_content).map_err(ConfigError::TomlParse)?;
         Ok(config)
     } else {
         // Don't print here, let caller decide how to inform user
-        let default_config = Config::new_default();
-        save_config(config_path, &default_config)?;
+        let default_config = Config::default();
+        save(config_path, &default_config)?;
         Ok(default_config)
     }
 }
 
 /// Saves the configuration to the TOML file.
-/// Exposed at crate root as save_config_util
-pub fn save_config(config_path: &Path, config: &Config) -> Result<(), Error> {
+///
+/// Creates the parent directory if it doesn't exist.
+///
+/// Exposed at crate root as `save_config_util`.
+///
+/// # Errors
+///
+/// - `ConfigError::Io`: If there's an error creating the parent directory or writing the file.
+/// - `ConfigError::TomlSerialize`: If the config data cannot be serialized to TOML.
+pub fn save(config_path: &Path, config: &Config) -> Result<(), ConfigError> {
     if let Some(parent_dir) = config_path.parent() {
         if !parent_dir.exists() {
             fs::create_dir_all(parent_dir)?;
         }
     }
-    let config_content = toml::to_string_pretty(config).map_err(Error::TomlSerialize)?;
+    let config_content = toml::to_string_pretty(config).map_err(ConfigError::TomlSerialize)?;
     fs::write(config_path, config_content)?;
     Ok(())
 }

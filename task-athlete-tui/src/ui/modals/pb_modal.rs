@@ -40,8 +40,8 @@ pub(super) fn render(f: &mut Frame, app: &App) {
             Units::Imperial => ("lbs", "mi"),
         };
 
-        if pb_info.achieved_weight_pb {
-            let weight_val = pb_info.new_weight.unwrap_or(0.0);
+        if pb_info.weight.achieved {
+            let weight_val = pb_info.weight.new_value.unwrap_or(0.0);
             let display_weight = match units {
                 Units::Metric => weight_val,
                 Units::Imperial => weight_val * 2.20462,
@@ -51,20 +51,20 @@ pub(super) fn render(f: &mut Frame, app: &App) {
                 display_weight, weight_unit
             )));
         }
-        if pb_info.achieved_reps_pb {
+        if pb_info.reps.achieved {
             text_lines.push(Line::from(format!(
                 "- New Max Reps: {}",
-                pb_info.new_reps.unwrap_or(0)
+                pb_info.reps.new_value.unwrap_or(0)
             )));
         }
-        if pb_info.achieved_duration_pb {
+        if pb_info.duration.achieved {
             text_lines.push(Line::from(format!(
                 "- New Max Duration: {} min",
-                pb_info.new_duration.unwrap_or(0)
+                pb_info.duration.new_value.unwrap_or(0)
             )));
         }
-        if pb_info.achieved_distance_pb {
-            let dist_val = pb_info.new_distance.unwrap_or(0.0);
+        if pb_info.distance.achieved {
+            let dist_val = pb_info.distance.new_value.unwrap_or(0.0);
             let display_dist = match units {
                 Units::Metric => dist_val,
                 Units::Imperial => dist_val * 0.621371,

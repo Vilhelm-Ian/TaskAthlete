@@ -19,7 +19,7 @@ pub fn log_list_next(app: &mut App) {
     // Refresh sets based on new selection (needs access to service or pre-fetched data)
     let workouts_for_date = app
         .service
-        .list_workouts(WorkoutFilters {
+        .list_workouts(&WorkoutFilters {
             date: Some(app.log_viewed_date),
             ..Default::default()
         })
@@ -41,7 +41,7 @@ pub fn log_list_previous(app: &mut App) {
     app.log_exercise_list_state.select(Some(i));
     let workouts_for_date = app
         .service
-        .list_workouts(WorkoutFilters {
+        .list_workouts(&WorkoutFilters {
             date: Some(app.log_viewed_date),
             ..Default::default()
         })

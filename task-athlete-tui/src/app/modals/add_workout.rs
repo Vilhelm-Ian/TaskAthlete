@@ -5,8 +5,9 @@ use crate::app::utils::parse_option_to_input;
 use crate::app::utils::{modify_numeric_input, parse_optional_float, parse_optional_int}; // Import from sibling utils module
 use crate::app::AppInputError;
 use anyhow::Result;
+use chrono::{NaiveDate, NaiveDateTime, TimeZone, Utc};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use task_athlete_lib::{DbError, ExerciseDefinition, ExerciseType};
+use task_athlete_lib::{AddWorkoutParams, DbError, ExerciseDefinition, ExerciseType};
 
 // --- Submission Logic ---
 
@@ -22,56 +23,57 @@ fn submit_add_workout(app: &mut App, modal_state: &ActiveModal) -> Result<bool, 
          resolved_exercise, // Use the stored resolved exercise
          .. // ignore focused_field, error_message, suggestions etc.
      } = modal_state {
+        let mut workout_parameters = AddWorkoutParams::default();
+        workout_parameters.date = if Utc::now().date_naive() == app.log_viewed_date {
+            Utc::now()
+        } else {
+            let naive = app.log_viewed_date.and_hms_opt(12, 0, 0)
+                .ok_or_else(|| AppInputError::InvalidDate("Invalid date".to_string()))?;
+            Utc.from_utc_datetime(&naive)
+        };
 
         // 1. Validate Exercise Selection
         let exercise_def = resolved_exercise.as_ref().ok_or_else(|| {
              // This error should ideally be prevented by the input handler (not allowing Tab/Enter without resolution)
              AppInputError::DbError("Exercise not resolved. Select a valid exercise.".to_string())
         })?;
-        let canonical_name = &exercise_def.name; // Already resolved
+        workout_parameters.exercise_identifier = exercise_def.name.as_str();
+
 
         // 2. Parse numeric inputs
-        let sets = parse_optional_int::<i64>(sets_input)?;
-        let reps = parse_optional_int::<i64>(reps_input)?;
-        let weight_arg = parse_optional_float(weight_input)?; // This is the value from the input field
-        let duration = parse_optional_int::<i64>(duration_input)?;
-        let distance_arg = parse_optional_float(distance_input)?; // Value from input field
+        workout_parameters.sets = parse_optional_int::<i64>(sets_input)?;
+
+        workout_parameters.reps = parse_optional_int::<i64>(reps_input)?;
+        workout_parameters.weight = parse_optional_float(weight_input)?; // This is the value from the input field
+        workout_parameters.duration = parse_optional_int::<i64>(duration_input)?;
+        workout_parameters.distance = parse_optional_float(distance_input)?; // Value from input field
 
         // 3. Notes
-        let notes = if notes_input.trim().is_empty() { None } else { Some(notes_input.trim().to_string()) };
+        workout_parameters.notes = if notes_input.trim().is_empty() { None } else { Some(notes_input.trim().to_string()) };
 
         // 4. Bodyweight & Units (Service layer handles this based on type and config)
-        let bodyweight_to_use = if exercise_def.type_ == ExerciseType::BodyWeight {
+        workout_parameters.bodyweight_to_use = if exercise_def.type_ == ExerciseType::BodyWeight {
             app.service.config.bodyweight // Pass the configured bodyweight
         } else {
             None
         };
-
+        let ex_identifier = workout_parameters.exercise_identifier;
         // 5. Call AppService
         match app.service.add_workout(
-            canonical_name,
-            app.log_viewed_date, // Use the date currently viewed in the log tab
-            sets,
-            reps,
-            weight_arg, // Pass the weight from the input field
-            duration,
-            distance_arg, // Pass the distance from the input field
-            notes,
-            None, // No implicit type needed (already resolved)
-            None, // No implicit muscles needed (already resolved)
-            bodyweight_to_use, // Pass configured bodyweight if needed
+            workout_parameters
         ) {
             Ok((_workout_id, pb_info)) => {
                  let mut pb_modal_opened = false; // Initialize the flag
                  if let Some(pb) = pb_info {
                     if pb.any_pb() {
-                        app.open_pb_modal(canonical_name.to_string(), pb);
+                        app.open_pb_modal(ex_identifier.to_string(), pb);
                         pb_modal_opened = true; // Set the flag if PB modal was opened
                     }
                  }
                  Ok(pb_modal_opened) // Return the flag indicating if PB modal was shown
             }
             Err(e) => {
+                dbg!("hello");
                  // Convert service error to modal error
                  if let Some(db_err) = e.downcast_ref::<DbError>() {
                      Err(AppInputError::DbError(db_err.to_string()))

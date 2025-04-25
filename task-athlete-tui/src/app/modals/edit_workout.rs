@@ -5,7 +5,7 @@ use crate::app::utils::{modify_numeric_input, parse_optional_float, parse_option
 use crate::app::AppInputError;
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use task_athlete_lib::ExerciseType; // Needed for bodyweight check
+use task_athlete_lib::EditWorkoutParams;
 
 // --- Submission Logic ---
 
@@ -22,18 +22,22 @@ fn submit_edit_workout(app: &mut App, modal_state: &ActiveModal) -> Result<(), A
          resolved_exercise, // Needed for type context (bodyweight)
          .. // ignore focused_field, error_message
      } = modal_state {
-
+        let mut edit_params = EditWorkoutParams::default();
+        edit_params.id = i64::try_from(*workout_id)
+            .map_err(|e| AppInputError::InvalidNumber(format!("{e}")))?;
         let exercise_def = resolved_exercise.as_ref().ok_or_else(|| {
              AppInputError::DbError("Internal error: Exercise context missing for edit.".to_string())
         })?;
+        edit_params.new_exercise_identifier = Some(exercise_def.name.clone());
+        // TODO exercise def
 
         // Parse inputs (reuse existing helpers)
-        let sets = parse_optional_int(sets_input)?;
-        let reps = parse_optional_int(reps_input)?;
-        let weight_arg = parse_optional_float(weight_input)?;
-        let duration = parse_optional_int::<i64>(duration_input)?;
-        let distance_arg = parse_optional_float(distance_input)?;
-        let notes = if notes_input.trim().is_empty() { None } else { Some(notes_input.trim().to_string()) };
+        edit_params.new_sets = parse_optional_int(sets_input)?;
+        edit_params.new_reps = parse_optional_int(reps_input)?;
+        edit_params.new_weight = parse_optional_float(weight_input)?;
+        edit_params.new_duration = parse_optional_int::<i64>(duration_input)?;
+        edit_params.new_distance_arg = parse_optional_float(distance_input)?;
+        edit_params.new_notes = if notes_input.trim().is_empty() { None } else { Some(notes_input.trim().to_string()) };
 
         // Bodyweight & Units handled by service layer (though not passed explicitly here,
         // the service knows the type from the workout_id)
@@ -42,15 +46,7 @@ fn submit_edit_workout(app: &mut App, modal_state: &ActiveModal) -> Result<(), A
 
         // Call AppService's edit_workout (assuming its signature)
         match app.service.edit_workout(
-            *workout_id as i64,
-            None, // exercise_name is not editable via this modal
-            sets,
-            reps,
-            weight_arg,
-            duration,
-            distance_arg,
-            notes,
-            None // type_ is not editable
+            edit_params
         ) {
             Ok(_) => Ok(()), // Success
             Err(e) => {

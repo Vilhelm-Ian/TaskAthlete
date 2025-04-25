@@ -32,7 +32,7 @@ impl App {
             date: Some(self.log_viewed_date),
             ..Default::default()
         };
-        match self.service.list_workouts(filters) {
+        match self.service.list_workouts(&filters) {
             Ok(workouts) => {
                 let mut unique_names = workouts
                     .iter()
@@ -311,7 +311,7 @@ impl App {
         let filters = WorkoutFilters {
             ..Default::default()
         };
-        match self.service.list_workouts(filters) {
+        match self.service.list_workouts(&filters) {
             Ok(all_workouts) => {
                 if all_workouts.is_empty() {
                     self.history_data.clear();

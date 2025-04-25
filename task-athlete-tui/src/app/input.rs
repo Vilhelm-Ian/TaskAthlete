@@ -1,5 +1,3 @@
-use std::error::Error;
-
 // src/app/input.rs
 use super::{
     data::{log_change_date, log_set_next_exercised_date, log_set_previous_exercised_date},

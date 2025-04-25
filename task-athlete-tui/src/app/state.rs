@@ -205,7 +205,7 @@ pub struct App {
 
     // === Bodyweight Tab State ===
     pub bw_focus: BodyweightFocus,
-    pub bw_history: Vec<(usize, chrono::DateTime<Utc>, f64)>,
+    pub bw_history: Vec<(i64, chrono::DateTime<Utc>, f64)>,
     pub bw_history_state: TableState,
     pub bw_target: Option<f64>,
     pub bw_latest: Option<f64>,
@@ -308,7 +308,7 @@ impl App {
             ..Default::default()
         };
         // Ignore errors here, just return None if fetch fails
-        match self.service.list_workouts(filters) {
+        match self.service.list_workouts(&filters) {
             Ok(workouts) if !workouts.is_empty() => workouts.into_iter().next(),
             _ => None,
         }

@@ -2,23 +2,15 @@
 mod cli; // Keep cli module for parsing args
 
 use anyhow::{bail, Context, Result};
-use chrono::{DateTime, Duration, NaiveDate, Utc}; // Keep Duration if needed, remove if not
+use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Utc}; // Keep Duration if needed, remove if not
 use comfy_table::{presets::UTF8_FULL, Attribute, Cell, Color, ContentArrangement, Table};
 use csv;
 use std::io;
 use std::io::{stdin, stdout, Write}; // For prompts
 
 use task_athlete_lib::{
-    AppService,
-    ConfigError,
-    DbError,
-    ExerciseDefinition,
-    ExerciseStats, // Import PB types, DbError, Stats types
-    ExerciseType,
-    PBInfo,
-    Units,
-    VolumeFilters,
-    Workout,
+    AddWorkoutParams, AppService, ConfigError, DbError, EditWorkoutParams, ExerciseDefinition,
+    ExerciseStats, ExerciseType, PBInfo, PbMetricInfo, Units, VolumeFilters, Workout,
     WorkoutFilters,
 };
 
@@ -174,22 +166,31 @@ fn main() -> Result<()> {
                 }
             }
 
+            let date = if Utc::now().date_naive() == date {
+                Utc::now()
+            } else {
+                let naive = date.and_hms_opt(12, 0, 0).unwrap();
+                Utc.from_utc_datetime(&naive)
+            };
+
             // Call the service add_workout method
             let db_implicit_type = implicit_type.map(cli_type_to_db_type);
             let units = service.config.units;
-            match service.add_workout(
-                identifier_trimmed,
-                date, // Pass date
+            let workout_arguments = AddWorkoutParams {
+                exercise_identifier: identifier_trimmed,
+                // timestamp: date,
                 sets,
                 reps,
                 weight,
+                distance,
                 duration,
-                distance, // Pass distance
+                date,
                 notes,
-                db_implicit_type,
-                implicit_muscles,  // Pass implicit creation details
-                bodyweight_to_use, // Pass the resolved bodyweight (if applicable)
-            ) {
+                bodyweight_to_use,
+                implicit_type: db_implicit_type,
+                implicit_muscles,
+            };
+            match service.add_workout(workout_arguments) {
                 Ok((id, pb_info_opt)) => {
                     // Feature 4: Get PB info
                     // Use the potentially *canonical* name if implicit creation happened or alias used
@@ -226,9 +227,17 @@ fn main() -> Result<()> {
             date,
         } => {
             // Add distance, handle date edit
-            match service.edit_workout(
-                id, exercise, sets, reps, weight, duration, distance, notes, date,
-            ) {
+            match service.edit_workout(EditWorkoutParams {
+                id,
+                new_exercise_identifier: exercise,
+                new_sets: sets,
+                new_reps: reps,
+                new_weight: weight,
+                new_duration: duration,
+                new_distance_arg: distance,
+                new_notes: notes,
+                new_date: date,
+            }) {
                 // Pass distance and date to service
                 // Ok(0) case handled by Err(DbError::NotFound) from service
                 Ok(rows) => println!(
@@ -292,7 +301,7 @@ fn main() -> Result<()> {
                     muscle: muscle.as_deref(),
                     limit: effective_limit,
                 };
-                service.list_workouts(filters)
+                service.list_workouts(&filters)
             };
 
             match workouts_result {
@@ -387,7 +396,7 @@ fn main() -> Result<()> {
                 limit_days: effective_limit,
             };
 
-            match service.calculate_daily_volume(filters) {
+            match service.calculate_daily_volume(&filters) {
                 Ok(volume_data) if volume_data.is_empty() => {
                     if export_csv {
                         print_volume_csv(volume_data, service.config.units)?;
@@ -657,10 +666,14 @@ fn prompt_and_log_bodyweight_cli(service: &mut AppService) -> Result<Option<f64>
 /// Needs mutable service to potentially update config via prompt.
 fn handle_pb_notification(service: &mut AppService, pb_info: &PBInfo, units: Units) -> Result<()> {
     // Check if *any* relevant PB was achieved before checking global enabled status
-    let relevant_pb_achieved = (pb_info.achieved_weight_pb && service.config.notify_pb_weight)
-        || (pb_info.achieved_reps_pb && service.config.notify_pb_reps)
-        || (pb_info.achieved_duration_pb && service.config.notify_pb_duration)
-        || (pb_info.achieved_distance_pb && service.config.notify_pb_distance);
+    let should_notify_weight = service.config.pb_notifications.notify_weight;
+    let should_notify_reps = service.config.pb_notifications.notify_reps;
+    let should_notify_distance = service.config.pb_notifications.notify_distance;
+    let should_notify_duration = service.config.pb_notifications.notify_duration;
+    let relevant_pb_achieved = (pb_info.weight.achieved && should_notify_weight)
+        || (pb_info.reps.achieved && should_notify_reps)
+        || (pb_info.duration.achieved && should_notify_duration)
+        || (pb_info.distance.achieved && should_notify_distance);
 
     if !relevant_pb_achieved {
         return Ok(()); // No relevant PB achieved, nothing to notify
@@ -687,56 +700,33 @@ fn handle_pb_notification(service: &mut AppService, pb_info: &PBInfo, units: Uni
 fn print_pb_message(pb_info: &PBInfo, units: Units, config: &task_athlete_lib::Config) {
     let mut messages = Vec::new();
 
-    if pb_info.achieved_weight_pb && config.notify_pb_weight {
+    if let Some((new, old)) = message_pb(&pb_info.weight, config.pb_notifications.notify_weight) {
         let weight_unit_str = match units {
             Units::Metric => "kg",
             Units::Imperial => "lbs",
         };
         messages.push(format!(
-            "New Max Weight: {:.2} {} {}",
-            pb_info.new_weight.unwrap_or(0.0),
-            weight_unit_str,
-            pb_info
-                .previous_weight
-                .map_or("".to_string(), |p| format!("(Previous: {:.2})", p))
+            "New Max Weight: {new:.2} {weight_unit_str} Previous: {old:.2}"
         ));
     }
-    if pb_info.achieved_reps_pb && config.notify_pb_reps {
-        messages.push(format!(
-            "New Max Reps: {} {}",
-            pb_info.new_reps.unwrap_or(0),
-            pb_info
-                .previous_reps
-                .map_or("".to_string(), |p| format!("(Previous: {})", p))
-        ));
+
+    if let Some((new, old)) = message_pb(&pb_info.reps, config.pb_notifications.notify_reps) {
+        messages.push(format!("New Max Reps: {new} Previous: {old}"));
     }
-    if pb_info.achieved_duration_pb && config.notify_pb_duration {
-        messages.push(format!(
-            "New Max Duration: {} min {}",
-            pb_info.new_duration.unwrap_or(0),
-            pb_info
-                .previous_duration
-                .map_or("".to_string(), |p| format!("(Previous: {} min)", p))
-        ));
+    if let Some((new, old)) = message_pb(&pb_info.duration, config.pb_notifications.notify_duration)
+    {
+        messages.push(format!("New Max Duration: {new} min (Previous: {old} min)"));
     }
-    if pb_info.achieved_distance_pb && config.notify_pb_distance {
-        let (dist_val, dist_unit) = match units {
-            Units::Metric => (pb_info.new_distance.unwrap_or(0.0), "km"),
-            Units::Imperial => (pb_info.new_distance.unwrap_or(0.0) * KM_TO_MILES, "miles"),
-        };
-        let prev_dist_str = match pb_info.previous_distance {
-            Some(prev_km) => {
-                let (prev_val, prev_unit) = match units {
-                    Units::Metric => (prev_km, "km"),
-                    Units::Imperial => (prev_km * KM_TO_MILES, "miles"),
-                };
-                format!("(Previous: {:.2} {})", prev_val, prev_unit)
-            }
-            None => "".to_string(),
+
+    if let Some((new_km, old_km)) =
+        message_pb(&pb_info.distance, config.pb_notifications.notify_distance)
+    {
+        let (new_val, old_val, unit) = match units {
+            Units::Metric => (new_km, old_km, "km"),
+            Units::Imperial => (new_km * KM_TO_MILES, old_km * KM_TO_MILES, "miles"),
         };
         messages.push(format!(
-            "New Max Distance: {:.2} {} {}",
-            dist_val, dist_unit, prev_dist_str
+            "New Max Distance: {new_val:.2} {unit} (Previous: {old_val:.2} {unit})"
         ));
     }
 
@@ -744,9 +734,23 @@ fn print_pb_message(pb_info: &PBInfo, units: Units, config: &task_athlete_lib::C
         println!("*********************************");
         println!("*     🎉 Personal Best! 🎉     *");
         for msg in messages {
-            println!("* {}", msg);
+            println!("* {msg}",);
         }
         println!("*********************************");
+    }
+}
+
+fn message_pb<T>(info: &PbMetricInfo<T>, notify: bool) -> Option<(T, T)>
+where
+    T: Default + std::marker::Copy + PartialEq,
+{
+    if info.achieved && notify {
+        Some((
+            info.new_value.unwrap_or_default(),
+            info.previous_value.unwrap_or_default(),
+        ))
+    } else {
+        None
     }
 }
 
@@ -780,7 +784,7 @@ fn prompt_and_set_pb_notification_cli(service: &mut AppService) -> Result<bool, 
 // --- Table Printing Functions (Remain in CLI) ---
 
 /// Prints logged bodyweights in a table
-fn print_bodyweight_table(entries: Vec<(usize, DateTime<Utc>, f64)>, units: Units) {
+fn print_bodyweight_table(entries: Vec<(i64, DateTime<Utc>, f64)>, units: Units) {
     let mut table = Table::new();
     let header_color = task_athlete_lib::parse_color("Blue")
         .map(Color::from)
@@ -794,21 +798,27 @@ fn print_bodyweight_table(entries: Vec<(usize, DateTime<Utc>, f64)>, units: Unit
         .load_preset(UTF8_FULL)
         .set_content_arrangement(ContentArrangement::Dynamic)
         .set_header(vec![
-            Cell::new("Timestamp (UTC)").fg(header_color),
+            Cell::new("Id").fg(header_color),
+            Cell::new("Timestamp (Local)").fg(header_color),
             Cell::new(format!("Weight ({})", weight_unit_str)).fg(header_color),
         ]);
 
     for (id, timestamp, weight) in entries {
         table.add_row(vec![
             Cell::new(id.to_string()),
-            Cell::new(timestamp.format("%Y-%m-%d %H:%M").to_string()),
+            Cell::new(
+                timestamp
+                    .with_timezone(&Local)
+                    .format("%Y-%m-%d %H:%M")
+                    .to_string(),
+            ),
             Cell::new(format!("{:.2}", weight)),
         ]);
     }
     println!("{table}");
 }
 
-fn print_bodyweight_csv(entries: Vec<(usize, DateTime<Utc>, f64)>, units: Units) -> Result<()> {
+fn print_bodyweight_csv(entries: Vec<(i64, DateTime<Utc>, f64)>, units: Units) -> Result<()> {
     let mut writer = csv::Writer::from_writer(io::stdout());
     let weight_unit_str = match units {
         Units::Metric => "kg",
@@ -816,12 +826,16 @@ fn print_bodyweight_csv(entries: Vec<(usize, DateTime<Utc>, f64)>, units: Units)
     };
 
     // Write header
-    writer.write_record(&["Timestamp_UTC", &format!("Weight_{}", weight_unit_str)])?;
+    writer.write_record(&[
+        "Id",
+        "Timestamp_Local",
+        &format!("Weight_{}", weight_unit_str),
+    ])?;
 
     for (id, timestamp, weight) in entries {
         writer.write_record(&[
             id.to_string(),
-            timestamp.to_rfc3339(),
+            timestamp.with_timezone(&Local).to_rfc3339(),
             format!("{:.2}", weight),
         ])?;
     }
@@ -846,7 +860,7 @@ fn print_workout_table(workouts: Vec<Workout>, header_color: Color, units: Units
         .set_content_arrangement(ContentArrangement::Dynamic)
         .set_header(vec![
             Cell::new("ID").fg(header_color),
-            Cell::new("Timestamp (UTC)").fg(header_color), // Display full timestamp
+            Cell::new("Timestamp (Local)").fg(header_color), // Display full timestamp
             Cell::new("Exercise").fg(header_color),
             Cell::new("Type").fg(header_color),
             Cell::new("Sets").fg(header_color),
@@ -866,8 +880,14 @@ fn print_workout_table(workouts: Vec<Workout>, header_color: Color, units: Units
 
         table.add_row(vec![
             Cell::new(workout.id.to_string()),
-            Cell::new(workout.timestamp.format("%Y-%m-%d %H:%M").to_string()), // Format for display
-            Cell::new(workout.exercise_name),                                  // Canonical name
+            Cell::new(
+                workout
+                    .timestamp
+                    .with_timezone(&Local)
+                    .format("%Y-%m-%d %H:%M")
+                    .to_string(),
+            ), // Format for display
+            Cell::new(workout.exercise_name), // Canonical name
             Cell::new(
                 workout
                     .exercise_type
@@ -1112,7 +1132,7 @@ fn print_workout_csv(workouts: Vec<Workout>, units: Units) -> Result<()> {
     // Write header
     writer.write_record(&[
         "ID",
-        "Timestamp_UTC",
+        "Timestamp_Local",
         "Exercise",
         "Type",
         "Sets",
@@ -1132,7 +1152,7 @@ fn print_workout_csv(workouts: Vec<Workout>, units: Units) -> Result<()> {
 
         writer.write_record(&[
             workout.id.to_string(),
-            workout.timestamp.to_rfc3339(), // Use ISO 8601/RFC3339 for CSV
+            workout.timestamp.with_timezone(&Local).to_rfc3339(), // Use ISO 8601/RFC3339 for CSV
             workout.exercise_name,
             workout
                 .exercise_type
@@ -1249,8 +1269,8 @@ fn print_stats_csv(stats: &ExerciseStats, units: Units) -> Result<()> {
 
     if let Some(pb_weight) = stats.personal_bests.max_weight {
         writer.write_record(&[
-            &format!("PB_Max_Weight_{}", weight_unit_str),
-            &format!("{:.2}", pb_weight),
+            &format!("PB_Max_Weight_{weight_unit_str}"),
+            &format!("{pb_weight:.2}"),
         ])?;
     }
     if let Some(pb_reps) = stats.personal_bests.max_reps {

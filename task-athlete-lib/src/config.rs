@@ -104,13 +104,13 @@ pub fn parse_color(color_str: &str) -> Result<StandardColor, Error> {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default)] // Ensure defaults are used if fields are missing
-pub struct ThemeConfig {
+pub struct Theme {
     pub header_color: String,
 }
 
-impl Default for ThemeConfig {
+impl Default for Theme {
     fn default() -> Self {
-        ThemeConfig {
+        Theme {
             header_color: "Green".to_string(),
         }
     }
@@ -133,13 +133,13 @@ pub struct Config {
     pub target_bodyweight: Option<f64>,
 
     // Theming
-    pub theme: ThemeConfig,
+    pub theme: Theme,
 }
 
 // Implement Default for Config manually to set defaults correctly
 impl Default for Config {
     fn default() -> Self {
-        Config {
+        Self {
             bodyweight: None,
             units: Units::default(),
             prompt_for_bodyweight: true, // Explicitly true by default
@@ -150,7 +150,7 @@ impl Default for Config {
             notify_pb_duration: true,    // Default to true
             notify_pb_distance: true,    // Default to true
             target_bodyweight: None,
-            theme: ThemeConfig::default(),
+            theme: Theme::default(),
         }
     }
 }
@@ -167,23 +167,20 @@ impl Config {
 pub fn get_config_path() -> Result<PathBuf, Error> {
     let config_dir_override = std::env::var(CONFIG_ENV_VAR).ok();
 
-    let config_dir_path = match config_dir_override {
-        Some(path_str) => {
-            let path = PathBuf::from(path_str);
-            if !path.is_dir() {
-                eprintln!( // Keep warning, as it's about env var setup
+    let config_dir_path = if let Some(path_str) = config_dir_override {
+        let path = PathBuf::from(path_str);
+        if !path.is_dir() {
+            eprintln!( // Keep warning, as it's about env var setup
                     "Warning: Environment variable {} points to '{}', which is not a directory. Trying to create it.",
                     CONFIG_ENV_VAR,
                     path.display()
                  );
-                fs::create_dir_all(&path)?;
-            }
-            path
+            fs::create_dir_all(&path)?;
         }
-        None => {
-            let base_config_dir = dirs::config_dir().ok_or(Error::CannotDetermineConfigDir)?;
-            base_config_dir.join(APP_CONFIG_DIR)
-        }
+        path
+    } else {
+        let base_config_dir = dirs::config_dir().ok_or(Error::CannotDetermineConfigDir)?;
+        base_config_dir.join(APP_CONFIG_DIR)
     };
 
     if !config_dir_path.exists() {
@@ -196,17 +193,17 @@ pub fn get_config_path() -> Result<PathBuf, Error> {
 /// Loads the configuration from the TOML file at the given path.
 /// Exposed at crate root as load_config_util
 pub fn load_config(config_path: &Path) -> Result<Config, Error> {
-    if !config_path.exists() {
-        // Don't print here, let caller decide how to inform user
-        let default_config = Config::new_default();
-        save_config(&config_path, &default_config)?;
-        Ok(default_config)
-    } else {
-        let config_content = fs::read_to_string(&config_path)?;
+    if config_path.exists() {
+        let config_content = fs::read_to_string(config_path)?;
         // Use serde(default) to handle missing fields when parsing
         let config: Config = toml::from_str(&config_content).map_err(Error::TomlParse)?;
         // No need to manually fill defaults here if using #[serde(default)] on struct and fields
         Ok(config)
+    } else {
+        // Don't print here, let caller decide how to inform user
+        let default_config = Config::new_default();
+        save_config(config_path, &default_config)?;
+        Ok(default_config)
     }
 }
 

@@ -1,6 +1,5 @@
 use anyhow::Result;
 use chrono::{Duration, NaiveDate, Utc};
-use rusqlite::Connection;
 use std::thread; // For adding delays in PB tests
 use std::time::Duration as StdDuration; // For delays
 use task_athlete_lib::{
@@ -39,11 +38,11 @@ fn create_test_service() -> Result<AppService> {
 
 // Helper to get a separate mutable connection for tests requiring transactions (like edit_exercise)
 // This is a bit of a hack because AppService owns its connection.
-fn create_mutable_conn_to_test_db() -> Result<Connection> {
-    let mut conn = rusqlite::Connection::open_in_memory()?;
-    task_athlete_lib::db::init_db(&conn)?; // Ensure schema is initialized
-    Ok(conn)
-}
+// fn create_mutable_conn_to_test_db() -> Result<Connection> {
+//     let mut conn = rusqlite::Connection::open_in_memory()?;
+//     task_athlete_lib::db::init_db(&conn)?; // Ensure schema is initialized
+//     Ok(conn)
+// }
 
 #[test]
 fn test_create_exercise_unique_name() -> Result<()> {
@@ -532,25 +531,27 @@ fn test_pb_config_interaction() -> Result<()> {
     let mut service = create_test_service()?; // PB notifications default to Some(true) here
 
     // Check initial state (global enabled)
-    assert_eq!(service.check_pb_notification_config()?, true);
+    assert!(service.check_pb_notification_config()?);
 
     // Disable PB notifications globally
     service.set_pb_notification_enabled(false)?;
     assert_eq!(service.config.notify_pb_enabled, Some(false));
-    assert_eq!(service.check_pb_notification_config()?, false);
+    assert!(!service.check_pb_notification_config()?);
 
     // Re-enable PB notifications globally
     service.set_pb_notification_enabled(true)?;
     assert_eq!(service.config.notify_pb_enabled, Some(true));
-    assert_eq!(service.check_pb_notification_config()?, true);
+    assert!(service.check_pb_notification_config()?);
 
     // Test case where config starts as None (simulate first run)
     service.config.notify_pb_enabled = None;
     let result = service.check_pb_notification_config();
     assert!(result.is_err());
-    match result.unwrap_err() {
-        ConfigError::PbNotificationNotSet => {} // Correct error
-        _ => panic!("Expected PbNotificationNotSet error"),
+    if let Err(result) = result {
+        match result {
+            ConfigError::PbNotificationNotSet => {} // Correct error
+            _ => panic!("Expected PbNotificationNotSet error"),
+        }
     }
 
     // Test individual metric flags

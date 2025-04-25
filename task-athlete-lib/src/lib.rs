@@ -20,7 +20,7 @@ pub use config::{
     Config,
     Error as ConfigError,
     StandardColor,
-    ThemeConfig,
+    Theme,
     Units,
 };
 pub use db::{

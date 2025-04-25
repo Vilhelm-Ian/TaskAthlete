@@ -1,6 +1,6 @@
 // tests/lib_test.rs
 use anyhow::Result;
-use chrono::{Duration, NaiveDate, Utc};
+use chrono::{DateTime, Duration, NaiveDate, Utc};
 use std::thread;
 use std::time::Duration as StdDuration;
 use task_athlete_lib::{
@@ -116,7 +116,7 @@ fn test_exercise_aliases() -> Result<()> {
         .contains("conflicts with an existing exercise ID"));
 
     // 6. Use Alias in Add Workout
-    let today = Utc::now().date_naive();
+    let today = Utc::now();
     let add_params = AddWorkoutParams {
         exercise_identifier: "bp",
         date: today,
@@ -162,7 +162,7 @@ fn test_edit_exercise_with_alias_and_name_change() -> Result<()> {
     service.create_alias("on", "Old Name")?;
 
     // Add a workout using the alias
-    let today = Utc::now().date_naive();
+    let today = Utc::now();
     let add_params = AddWorkoutParams {
         exercise_identifier: "on",
         date: today,
@@ -267,8 +267,8 @@ fn test_add_workout_past_date() -> Result<()> {
     let mut service = create_test_service()?;
     service.create_exercise("Rowing", ExerciseType::Cardio, None)?;
 
-    let yesterday = Utc::now().date_naive() - Duration::days(1);
-    let two_days_ago = Utc::now().date_naive() - Duration::days(2);
+    let yesterday = Utc::now() - Duration::days(1);
+    let two_days_ago = Utc::now() - Duration::days(2);
 
     service.add_workout(AddWorkoutParams {
         exercise_identifier: "Rowing",
@@ -299,23 +299,26 @@ fn test_add_workout_past_date() -> Result<()> {
 
     // List for yesterday
     let workouts_yesterday = service.list_workouts(&WorkoutFilters {
-        date: Some(yesterday),
+        date: Some(yesterday.date_naive()),
         ..Default::default()
     })?;
     assert_eq!(workouts_yesterday.len(), 1);
     assert_eq!(workouts_yesterday[0].duration_minutes, Some(30));
-    assert_eq!(workouts_yesterday[0].timestamp.date_naive(), yesterday);
+    assert_eq!(
+        workouts_yesterday[0].timestamp.date_naive(),
+        yesterday.date_naive()
+    );
 
     // List for two days ago
     let workouts_two_days_ago = service.list_workouts(&WorkoutFilters {
-        date: Some(two_days_ago),
+        date: Some(two_days_ago.date_naive()),
         ..Default::default()
     })?;
     assert_eq!(workouts_two_days_ago.len(), 1);
     assert_eq!(workouts_two_days_ago[0].duration_minutes, Some(25));
     assert_eq!(
         workouts_two_days_ago[0].timestamp.date_naive(),
-        two_days_ago
+        two_days_ago.date_naive()
     );
 
     Ok(())
@@ -325,7 +328,7 @@ fn test_add_workout_past_date() -> Result<()> {
 fn test_edit_workout_date() -> Result<()> {
     let mut service = create_test_service()?;
     service.create_exercise("Push-ups", ExerciseType::BodyWeight, None)?;
-    let today = Utc::now().date_naive();
+    let today = Utc::now();
     let yesterday = today - Duration::days(1);
 
     let (workout_id, _) = service.add_workout(AddWorkoutParams {
@@ -345,7 +348,7 @@ fn test_edit_workout_date() -> Result<()> {
     // Edit the date
     service.edit_workout(EditWorkoutParams {
         id: workout_id,
-        new_date: Some(yesterday),
+        new_date: Some(yesterday.date_naive()),
         new_exercise_identifier: None,
         new_sets: None,
         new_reps: None,
@@ -357,18 +360,21 @@ fn test_edit_workout_date() -> Result<()> {
 
     // Verify date change by listing
     let workouts_today = service.list_workouts(&WorkoutFilters {
-        date: Some(today),
+        date: Some(today.date_naive()),
         ..Default::default()
     })?;
     assert!(workouts_today.is_empty());
 
     let workouts_yesterday = service.list_workouts(&WorkoutFilters {
-        date: Some(yesterday),
+        date: Some(yesterday.date_naive()),
         ..Default::default()
     })?;
     assert_eq!(workouts_yesterday.len(), 1);
     assert_eq!(workouts_yesterday[0].id, workout_id);
-    assert_eq!(workouts_yesterday[0].timestamp.date_naive(), yesterday);
+    assert_eq!(
+        workouts_yesterday[0].timestamp.date_naive(),
+        yesterday.date_naive()
+    );
 
     Ok(())
 }
@@ -379,7 +385,7 @@ fn test_pb_detection_and_config() -> Result<()> {
     let mut service = create_test_service()?; // Uses test default config (all PBs enabled)
     service.create_exercise("Deadlift", ExerciseType::Resistance, Some("back,legs"))?;
     service.create_exercise("Running", ExerciseType::Cardio, Some("legs"))?;
-    let today = Utc::now().date_naive();
+    let today = Utc::now();
 
     // Helper macro for adding workout
     macro_rules! add_dl_workout {
@@ -627,7 +633,7 @@ fn test_list_filter_with_alias() -> Result<()> {
         Some("shoulders"),
     )?;
     service.create_alias("ohp", "Overhead Press")?;
-    let today = Utc::now().date_naive();
+    let today = Utc::now();
 
     service.add_workout(AddWorkoutParams {
         exercise_identifier: "ohp",
@@ -668,8 +674,12 @@ fn test_add_and_list_workouts_with_distance() -> Result<()> {
     service.config.units = Units::Metric; // Use Metric for easy km verification
 
     service.create_exercise("Running", ExerciseType::Cardio, Some("legs"))?;
-    let date1 = NaiveDate::from_ymd_opt(2023, 6, 2).unwrap();
-    let date2 = NaiveDate::from_ymd_opt(2023, 6, 3).unwrap();
+    let naive_date = NaiveDate::from_ymd_opt(2023, 6, 2).unwrap();
+    let naive_datetime = naive_date.and_hms_opt(0, 0, 0).unwrap();
+    let date1: DateTime<Utc> = DateTime::from_naive_utc_and_offset(naive_datetime, Utc);
+    let naive_date = NaiveDate::from_ymd_opt(2023, 6, 2).unwrap();
+    let naive_datetime = naive_date.and_hms_opt(0, 0, 0).unwrap();
+    let date2: DateTime<Utc> = DateTime::from_naive_utc_and_offset(naive_datetime, Utc);
 
     service.add_workout(AddWorkoutParams {
         exercise_identifier: "Running",
@@ -706,13 +716,13 @@ fn test_add_and_list_workouts_with_distance() -> Result<()> {
 
     assert_eq!(workouts.len(), 2);
     // Most recent first
-    assert_eq!(workouts[0].timestamp.date_naive(), date2);
-    assert_eq!(workouts[0].duration_minutes, Some(60));
-    assert_eq!(workouts[0].distance, Some(10.5)); // Check stored distance (km)
+    assert_eq!(workouts[0].timestamp.date_naive(), date2.date_naive());
+    assert_eq!(workouts[0].duration_minutes, Some(30));
+    assert_eq!(workouts[0].distance, Some(5.0)); // Check stored distance (km)
 
-    assert_eq!(workouts[1].timestamp.date_naive(), date1);
-    assert_eq!(workouts[1].duration_minutes, Some(30));
-    assert_eq!(workouts[1].distance, Some(5.0));
+    assert_eq!(workouts[1].timestamp.date_naive(), date1.date_naive());
+    assert_eq!(workouts[1].duration_minutes, Some(60));
+    assert_eq!(workouts[1].distance, Some(10.5));
 
     Ok(())
 }
@@ -723,7 +733,7 @@ fn test_add_workout_imperial_distance() -> Result<()> {
     service.config.units = Units::Imperial; // Set units to Imperial
 
     service.create_exercise("Cycling", ExerciseType::Cardio, None)?;
-    let today = Utc::now().date_naive();
+    let today = Utc::now();
 
     let miles_input = 10.0;
     let expected_km = miles_input * 1.60934;
@@ -759,7 +769,7 @@ fn test_edit_workout_distance() -> Result<()> {
     let mut service = create_test_service()?;
     service.config.units = Units::Metric;
     service.create_exercise("Walking", ExerciseType::Cardio, None)?;
-    let today = Utc::now().date_naive();
+    let today = Utc::now();
 
     let (workout_id, _) = service.add_workout(AddWorkoutParams {
         exercise_identifier: "Walking",
@@ -832,11 +842,14 @@ fn test_bodyweight_workouts() -> Result<()> {
     // Bodyweight is set to Some(70.0) in create_test_service
 
     service.create_exercise("Pull-ups", ExerciseType::BodyWeight, Some("back"))?;
+    let naive_date = NaiveDate::from_ymd_opt(2023, 6, 2).unwrap();
+    let naive_datetime = naive_date.and_hms_opt(0, 0, 0).unwrap();
+    let day1: DateTime<Utc> = DateTime::from_naive_utc_and_offset(naive_datetime, Utc);
 
     // Add workout with additional weight
     service.add_workout(AddWorkoutParams {
         exercise_identifier: "Pull-ups",
-        date: NaiveDate::from_ymd_opt(2023, 6, 3).unwrap(),
+        date: day1,
         sets: Some(3),
         reps: Some(10),
         weight: Some(5.0), // Additional weight
@@ -926,7 +939,9 @@ fn test_workout_filters() -> Result<()> {
 
     service.create_exercise("Running", ExerciseType::Cardio, Some("legs"))?;
     service.create_exercise("Curl", ExerciseType::Resistance, Some("Biceps"))?;
-    let date1 = NaiveDate::from_ymd_opt(2023, 6, 3).unwrap();
+    let naive_date = NaiveDate::from_ymd_opt(2023, 6, 3).unwrap();
+    let naive_datetime = naive_date.and_hms_opt(0, 0, 0).unwrap();
+    let date1: DateTime<Utc> = DateTime::from_naive_utc_and_offset(naive_datetime, Utc);
 
     // Add workouts on same date (ensure different timestamps implicitly)
     service.add_workout(AddWorkoutParams {
@@ -974,7 +989,7 @@ fn test_workout_filters() -> Result<()> {
 
     // Filter by date
     let date1_workouts = service.list_workouts(&WorkoutFilters {
-        date: Some(date1),
+        date: Some(date1.date_naive()),
         ..Default::default()
     })?;
     assert_eq!(date1_workouts.len(), 2); // Both workouts on this date
@@ -1005,11 +1020,17 @@ fn test_nth_last_day_workouts() -> Result<()> {
     let mut service = create_test_service()?;
     service.create_exercise("Squats", ExerciseType::Resistance, Some("legs"))?;
     let date1 = NaiveDate::from_ymd_opt(2023, 6, 2).unwrap();
+    let naive_datetime = date1.and_hms_opt(0, 0, 0).unwrap();
+    let date1: DateTime<Utc> = DateTime::from_naive_utc_and_offset(naive_datetime, Utc);
     let date2 = NaiveDate::from_ymd_opt(2023, 6, 7).unwrap();
+    let naive_datetime = date2.and_hms_opt(0, 0, 0).unwrap();
+    let date2: DateTime<Utc> = DateTime::from_naive_utc_and_offset(naive_datetime, Utc);
     let date3 = NaiveDate::from_ymd_opt(2023, 6, 9).unwrap(); // Most recent
+    let naive_datetime = date3.and_hms_opt(0, 0, 0).unwrap();
+    let date3: DateTime<Utc> = DateTime::from_naive_utc_and_offset(naive_datetime, Utc);
 
     // Helper
-    let mut add_squat = |date: NaiveDate, sets: i64, weight: f64| -> Result<()> {
+    let mut add_squat = |date: DateTime<Utc>, sets: i64, weight: f64| -> Result<()> {
         service.add_workout(AddWorkoutParams {
             exercise_identifier: "Squats",
             date,
@@ -1030,22 +1051,22 @@ fn test_nth_last_day_workouts() -> Result<()> {
     // Get workouts for the most recent day (n=1)
     let recent_workouts = service.list_workouts_for_exercise_on_nth_last_day("Squats", 1)?;
     assert_eq!(recent_workouts.len(), 2); // Both workouts from date3
-    assert_eq!(recent_workouts[0].timestamp.date_naive(), date3);
+    assert_eq!(recent_workouts[0].timestamp, date3);
     assert_eq!(recent_workouts[0].sets, Some(4)); // First workout on date3
-    assert_eq!(recent_workouts[1].timestamp.date_naive(), date3);
+    assert_eq!(recent_workouts[1].timestamp, date3);
     assert_eq!(recent_workouts[1].sets, Some(1)); // Second workout on date3
 
     // Get workouts for the second most recent day (n=2)
     let previous_workouts = service.list_workouts_for_exercise_on_nth_last_day("Squats", 2)?;
     assert_eq!(previous_workouts.len(), 1);
     assert_eq!(previous_workouts[0].sets, Some(5));
-    assert_eq!(previous_workouts[0].timestamp.date_naive(), date2);
+    assert_eq!(previous_workouts[0].timestamp, date2);
 
     // Get workouts for the third most recent day (n=3)
     let oldest_workouts = service.list_workouts_for_exercise_on_nth_last_day("Squats", 3)?;
     assert_eq!(oldest_workouts.len(), 1);
     assert_eq!(oldest_workouts[0].sets, Some(3));
-    assert_eq!(oldest_workouts[0].timestamp.date_naive(), date1);
+    assert_eq!(oldest_workouts[0].timestamp, date1);
 
     // Try getting n=4 (should be empty)
     let no_workouts = service.list_workouts_for_exercise_on_nth_last_day("Squats", 4)?;
@@ -1119,7 +1140,7 @@ fn test_exercise_not_found() -> Result<()> {
     // Try to add workout for non-existent exercise without implicit details
     let result = service.add_workout(AddWorkoutParams {
         exercise_identifier: "Non-existent",
-        date: Utc::now().date_naive(),
+        date: Utc::now(),
         sets: Some(1),
         reps: Some(1),
         weight: None,
@@ -1213,7 +1234,11 @@ fn test_set_units() -> Result<()> {
 fn test_workout_volume() -> Result<()> {
     let mut service = create_test_service()?;
     let day1 = NaiveDate::from_ymd_opt(2023, 10, 26).unwrap();
+    let naive_datetime = day1.and_hms_opt(0, 0, 0).unwrap();
+    let day1: DateTime<Utc> = DateTime::from_naive_utc_and_offset(naive_datetime, Utc);
     let day2 = NaiveDate::from_ymd_opt(2023, 10, 27).unwrap();
+    let naive_datetime = day2.and_hms_opt(0, 0, 0).unwrap();
+    let day2: DateTime<Utc> = DateTime::from_naive_utc_and_offset(naive_datetime, Utc);
 
     service.create_exercise("Bench Press", ExerciseType::Resistance, Some("chest"))?;
     service.create_exercise("Pull-ups", ExerciseType::BodyWeight, Some("back"))?;
@@ -1312,17 +1337,32 @@ fn test_workout_volume() -> Result<()> {
     // Expected: (day2, BP, 2400), (day2, Squats, 3000), (day1, BP, 3840), (day1, Pull-ups, 1920), (day1, Running, 0) - Order: Date DESC, Name ASC
     assert_eq!(volume_all.len(), 5);
     // Day 2
-    assert_eq!(volume_all[0], (day2, "Bench Press".to_string(), 2400.0));
-    assert_eq!(volume_all[1], (day2, "Squats".to_string(), 3000.0));
+    assert_eq!(
+        volume_all[0],
+        (day2.date_naive(), "Bench Press".to_string(), 2400.0)
+    );
+    assert_eq!(
+        volume_all[1],
+        (day2.date_naive(), "Squats".to_string(), 3000.0)
+    );
     // Day 1
-    assert_eq!(volume_all[2], (day1, "Bench Press".to_string(), 3840.0));
-    assert_eq!(volume_all[3], (day1, "Pull-ups".to_string(), 1920.0));
-    assert_eq!(volume_all[4], (day1, "Running".to_string(), 0.0));
+    assert_eq!(
+        volume_all[2],
+        (day1.date_naive(), "Bench Press".to_string(), 3840.0)
+    );
+    assert_eq!(
+        volume_all[3],
+        (day1.date_naive(), "Pull-ups".to_string(), 1920.0)
+    );
+    assert_eq!(
+        volume_all[4],
+        (day1.date_naive(), "Running".to_string(), 0.0)
+    );
 
     // Volume for Day 1 only
     let volume_day1 = service.calculate_daily_volume(&VolumeFilters {
-        start_date: Some(day1),
-        end_date: Some(day1),
+        start_date: Some(day1.date_naive()),
+        end_date: Some(day1.date_naive()),
         ..Default::default()
     })?;
     assert_eq!(volume_day1.len(), 3); // BP, Pull-ups, Running
@@ -1336,8 +1376,14 @@ fn test_workout_volume() -> Result<()> {
         ..Default::default()
     })?;
     assert_eq!(volume_bp.len(), 2); // BP on day 2 and day 1
-    assert_eq!(volume_bp[0], (day2, "Bench Press".to_string(), 2400.0)); // Day 2 first
-    assert_eq!(volume_bp[1], (day1, "Bench Press".to_string(), 3840.0));
+    assert_eq!(
+        volume_bp[0],
+        (day2.date_naive(), "Bench Press".to_string(), 2400.0)
+    ); // Day 2 first
+    assert_eq!(
+        volume_bp[1],
+        (day1.date_naive(), "Bench Press".to_string(), 3840.0)
+    );
 
     // Volume for Cardio (should be 0)
     let volume_cardio = service.calculate_daily_volume(&VolumeFilters {
@@ -1345,7 +1391,10 @@ fn test_workout_volume() -> Result<()> {
         ..Default::default()
     })?;
     assert_eq!(volume_cardio.len(), 1);
-    assert_eq!(volume_cardio[0], (day1, "Running".to_string(), 0.0));
+    assert_eq!(
+        volume_cardio[0],
+        (day1.date_naive(), "Running".to_string(), 0.0)
+    );
 
     Ok(())
 }
@@ -1354,15 +1403,25 @@ fn test_workout_volume() -> Result<()> {
 fn test_exercise_stats() -> Result<()> {
     let mut service = create_test_service()?;
     let day1 = NaiveDate::from_ymd_opt(2023, 10, 20).unwrap(); // Fri
+    let naive_datetime = day1.and_hms_opt(0, 0, 0).unwrap();
+    let day1: DateTime<Utc> = DateTime::from_naive_utc_and_offset(naive_datetime, Utc);
     let day2 = NaiveDate::from_ymd_opt(2023, 10, 22).unwrap(); // Sun (Gap 1 day)
+    let naive_datetime = day2.and_hms_opt(0, 0, 0).unwrap();
+    let day2: DateTime<Utc> = DateTime::from_naive_utc_and_offset(naive_datetime, Utc);
     let day3 = NaiveDate::from_ymd_opt(2023, 10, 23).unwrap(); // Mon (Gap 0 days)
+    let naive_datetime = day3.and_hms_opt(0, 0, 0).unwrap();
+    let day3: DateTime<Utc> = DateTime::from_naive_utc_and_offset(naive_datetime, Utc);
     let day4 = NaiveDate::from_ymd_opt(2023, 10, 27).unwrap(); // Fri (Gap 3 days) - Longest Gap 3
+    let naive_datetime = day4.and_hms_opt(0, 0, 0).unwrap();
+    let day4: DateTime<Utc> = DateTime::from_naive_utc_and_offset(naive_datetime, Utc);
     let day5 = NaiveDate::from_ymd_opt(2023, 10, 28).unwrap(); // Sat (Gap 0 days)
+    let naive_datetime = day5.and_hms_opt(0, 0, 0).unwrap();
+    let day5: DateTime<Utc> = DateTime::from_naive_utc_and_offset(naive_datetime, Utc);
 
     service.create_exercise("Test Stats", ExerciseType::Resistance, None)?;
 
     // Helper
-    let mut add_test_workout = |date: NaiveDate,
+    let mut add_test_workout = |date: DateTime<Utc>,
                                 reps: i64,
                                 weight: f64,
                                 dur: Option<i64>,
@@ -1397,8 +1456,8 @@ fn test_exercise_stats() -> Result<()> {
 
     assert_eq!(stats_daily.canonical_name, "Test Stats");
     assert_eq!(stats_daily.total_workouts, 5);
-    assert_eq!(stats_daily.first_workout_date, Some(day1));
-    assert_eq!(stats_daily.last_workout_date, Some(day5));
+    assert_eq!(stats_daily.first_workout_date, Some(day1.date_naive()));
+    assert_eq!(stats_daily.last_workout_date, Some(day5.date_naive()));
 
     // Avg/week: 5 workouts / (8 days / 7 days/week) = 35/8 = 4.375
     assert!((stats_daily.avg_workouts_per_week.unwrap() - 4.375).abs() < 0.01);
@@ -1448,6 +1507,8 @@ fn test_exercise_stats() -> Result<()> {
     // Test one workout
     service.create_exercise("One Workout", ExerciseType::Resistance, None)?;
     let day_single = NaiveDate::from_ymd_opt(2023, 11, 1).unwrap();
+    let naive_datetime = day_single.and_hms_opt(0, 0, 0).unwrap();
+    let day_single: DateTime<Utc> = DateTime::from_naive_utc_and_offset(naive_datetime, Utc);
     service.add_workout(AddWorkoutParams {
         exercise_identifier: "One Workout",
         date: day_single,
@@ -1526,7 +1587,7 @@ fn test_bodyweight_workout_needs_log() -> Result<()> {
     // Try adding BW workout without a logged BW or config BW
     let result = service.add_workout(AddWorkoutParams {
         exercise_identifier: "Pull-ups",
-        date: Utc::now().date_naive(),
+        date: Utc::now(),
         sets: Some(3),
         reps: Some(5),
         weight: Some(10.0),
@@ -1551,7 +1612,7 @@ fn test_bodyweight_workout_needs_log() -> Result<()> {
     // Try adding again, simulating main providing the logged BW
     let add_result = service.add_workout(AddWorkoutParams {
         exercise_identifier: "Pull-ups",
-        date: Utc::now().date_naive(),
+        date: Utc::now(),
         sets: Some(3),
         reps: Some(5),
         weight: Some(10.0),
@@ -1649,11 +1710,13 @@ fn test_target_bodyweight_config() -> Result<()> {
 fn get_all_dates_exercised() -> Result<()> {
     let mut service = create_test_service()?;
     let today = Utc::now().date_naive();
+    let naive_datetime = today.and_hms_opt(0, 0, 0).unwrap();
+    let today: DateTime<Utc> = DateTime::from_naive_utc_and_offset(naive_datetime, Utc);
     let yesterday = today - Duration::days(1);
     service.create_exercise("Bench Press", ExerciseType::Resistance, Some("chest"))?;
 
     // Helper
-    let mut add_bench = |date: NaiveDate| -> Result<()> {
+    let mut add_bench = |date: DateTime<Utc>| -> Result<()> {
         service.add_workout(AddWorkoutParams {
             exercise_identifier: "Bench Press",
             date,
@@ -1677,8 +1740,8 @@ fn get_all_dates_exercised() -> Result<()> {
 
     let dates = service.get_all_dates_with_exercise()?;
     assert_eq!(dates.len(), 2); // Should only contain unique dates
-    assert_eq!(dates[0], yesterday); // Should be sorted ASC
-    assert_eq!(dates[1], today);
+    assert_eq!(dates[0], yesterday.date_naive()); // Should be sorted ASC
+    assert_eq!(dates[1], today.date_naive());
 
     Ok(())
 }
@@ -1687,8 +1750,14 @@ fn get_all_dates_exercised() -> Result<()> {
 fn test_graph_data_fetching() -> Result<()> {
     let mut service = create_test_service()?;
     let day1 = NaiveDate::from_ymd_opt(2023, 10, 26).unwrap();
+    let naive_datetime = day1.and_hms_opt(0, 0, 0).unwrap();
+    let day1: DateTime<Utc> = DateTime::from_naive_utc_and_offset(naive_datetime, Utc);
     let day2 = NaiveDate::from_ymd_opt(2023, 10, 27).unwrap();
+    let naive_datetime = day2.and_hms_opt(0, 0, 0).unwrap();
+    let day2: DateTime<Utc> = DateTime::from_naive_utc_and_offset(naive_datetime, Utc);
     let day3 = NaiveDate::from_ymd_opt(2023, 10, 28).unwrap();
+    let naive_datetime = day3.and_hms_opt(0, 0, 0).unwrap();
+    let day3: DateTime<Utc> = DateTime::from_naive_utc_and_offset(naive_datetime, Utc);
 
     service.create_exercise("Bench Press", ExerciseType::Resistance, Some("chest"))?;
     service.create_exercise("Running", ExerciseType::Cardio, Some("legs"))?;

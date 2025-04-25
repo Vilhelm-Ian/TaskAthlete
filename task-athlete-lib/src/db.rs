@@ -1,9 +1,8 @@
 //src/db.rs
-use anyhow::{bail, Context, Result};
-use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
+use anyhow::Result;
+use chrono::{DateTime, NaiveDate, Utc};
 use rusqlite::{named_params, params, Connection, OptionalExtension, Row, ToSql}; // Import named_params
-use std::collections::HashMap; // For listing aliases
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -35,9 +34,9 @@ impl TryFrom<&str> for ExerciseType {
 impl fmt::Display for ExerciseType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ExerciseType::Resistance => write!(f, "resistance"),
-            ExerciseType::Cardio => write!(f, "cardio"),
-            ExerciseType::BodyWeight => write!(f, "body-weight"), // Consistent storage
+            Self::Resistance => write!(f, "resistance"),
+            Self::Cardio => write!(f, "cardio"),
+            Self::BodyWeight => write!(f, "body-weight"), // Consistent storage
         }
     }
 }
@@ -97,7 +96,7 @@ pub fn calculate_daily_volume_filtered(
     }
     if let Some(m) = filters.muscle {
         sql.push_str(" AND e.muscles LIKE :muscle");
-        params_map.insert(":muscle".into(), Box::new(format!("%{}%", m)));
+        params_map.insert(":muscle".into(), Box::new(format!("%{m}%")));
     }
 
     // Group by date AND exercise name to sum volume correctly per exercise per day
@@ -144,7 +143,7 @@ pub fn calculate_daily_volume_filtered(
         .map_err(DbError::QueryFailed)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Workout {
     pub id: i64,
     pub timestamp: DateTime<Utc>,
@@ -153,12 +152,12 @@ pub struct Workout {
     pub reps: Option<i64>,
     pub weight: Option<f64>,
     pub duration_minutes: Option<i64>,
-    pub distance: Option<f64>, // Added distance
+    pub distance: Option<f64>,
     pub notes: Option<String>,
     pub exercise_type: Option<ExerciseType>, // Populated by JOIN
 }
 
-#[derive(Debug, Clone, PartialEq)] // Add Clone
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExerciseDefinition {
     pub id: i64,
     pub name: String,
@@ -361,23 +360,28 @@ pub fn add_workout(
 /// Updates an existing workout entry in the database by its ID.
 pub fn update_workout(
     conn: &Connection,
-    id: i64,
-    new_exercise_name: Option<&str>,
-    new_sets: Option<i64>,
-    new_reps: Option<i64>,
-    new_weight: Option<f64>,
-    new_duration: Option<i64>,
-    new_distance: Option<f64>,
-    new_notes: Option<&str>,
-    new_timestamp: Option<DateTime<Utc>>, // Feature 3: Allow editing timestamp
+    workout: Workout,
+    new_name: Option<String>,
+    new_timestamp: Option<DateTime<Utc>>,
 ) -> Result<u64, DbError> {
+    let Workout {
+        id,
+        sets: new_sets,
+        reps: new_reps,
+        weight: new_weight,
+        duration_minutes: new_duration,
+        distance: new_distance,
+        notes: new_notes,
+        ..
+    } = workout;
     let mut params_map: HashMap<String, Box<dyn ToSql>> = HashMap::new();
     let mut updates = Vec::new();
 
-    if let Some(ex) = new_exercise_name {
+    if let Some(name) = new_name {
         updates.push("exercise_name = :ex_name");
-        params_map.insert(":ex_name".into(), Box::new(ex.to_string()));
+        params_map.insert(":ex_name".into(), Box::new(name.to_string()));
     }
+
     if let Some(s) = new_sets {
         updates.push("sets = :sets");
         params_map.insert(":sets".into(), Box::new(s));

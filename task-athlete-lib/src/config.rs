@@ -3,7 +3,6 @@ use anyhow::Result;
 use comfy_table::Color;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::{stdin, Write};
 use std::path::{Path, PathBuf};
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
@@ -14,7 +13,7 @@ const APP_CONFIG_DIR: &str = "workout-tracker-cli";
 const CONFIG_ENV_VAR: &str = "WORKOUT_CONFIG_DIR"; // Environment variable name
 
 #[derive(Error, Debug)]
-pub enum ConfigError {
+pub enum Error {
     #[error("Could not determine configuration directory.")]
     CannotDetermineConfigDir,
     #[error("I/O error accessing config file: {0}")]
@@ -40,30 +39,12 @@ pub enum ConfigError {
     InvalidPbNotificationInput(String),
 }
 
-// Note: PbMetricScope removed as specific booleans are used now.
-//       Kept the enum definition commented out in case of future refactoring.
-// #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, EnumIter)]
-// #[serde(rename_all = "lowercase")]
-// pub enum PbMetricScope {
-//     All,     // Check weight and reps
-//     Weight,  // Only check weight PBs
-//     Reps,    // Only check reps PBs
-//     // Note: Disabling notifications entirely is handled by notify_on_pb = false
-// }
-// impl Default for PbMetricScope { fn default() -> Self { PbMetricScope::All } }
-
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Units {
-    Metric,   // e.g., kg, km
+    #[default]
+    Metric, // e.g., kg, km
     Imperial, // e.g., lbs, miles
-}
-
-// Implement Default for Units
-impl Default for Units {
-    fn default() -> Self {
-        Units::Metric // Default to Metric
-    }
 }
 
 // Define standard colors using strum for easy iteration/parsing
@@ -91,34 +72,34 @@ pub enum StandardColor {
 impl From<StandardColor> for Color {
     fn from(value: StandardColor) -> Self {
         match value {
-            StandardColor::Black => Color::Black,
-            StandardColor::Red => Color::Red,
-            StandardColor::Green => Color::Green,
-            StandardColor::Yellow => Color::Yellow,
-            StandardColor::Blue => Color::Blue,
-            StandardColor::Magenta => Color::Magenta,
-            StandardColor::Cyan => Color::Cyan,
-            StandardColor::White => Color::White,
-            StandardColor::DarkGrey => Color::DarkGrey,
-            StandardColor::DarkRed => Color::DarkRed,
-            StandardColor::DarkGreen => Color::DarkGreen,
-            StandardColor::DarkYellow => Color::DarkYellow,
-            StandardColor::DarkBlue => Color::DarkBlue,
-            StandardColor::DarkMagenta => Color::DarkMagenta,
-            StandardColor::DarkCyan => Color::DarkCyan,
-            StandardColor::Grey => Color::Grey,
+            StandardColor::Black => Self::Black,
+            StandardColor::Red => Self::Red,
+            StandardColor::Green => Self::Green,
+            StandardColor::Yellow => Self::Yellow,
+            StandardColor::Blue => Self::Blue,
+            StandardColor::Magenta => Self::Magenta,
+            StandardColor::Cyan => Self::Cyan,
+            StandardColor::White => Self::White,
+            StandardColor::DarkGrey => Self::DarkGrey,
+            StandardColor::DarkRed => Self::DarkRed,
+            StandardColor::DarkGreen => Self::DarkGreen,
+            StandardColor::DarkYellow => Self::DarkYellow,
+            StandardColor::DarkBlue => Self::DarkBlue,
+            StandardColor::DarkMagenta => Self::DarkMagenta,
+            StandardColor::DarkCyan => Self::DarkCyan,
+            StandardColor::Grey => Self::Grey,
         }
     }
 }
 
 // Helper to parse a string into our StandardColor enum
-pub fn parse_color(color_str: &str) -> Result<StandardColor, ConfigError> {
+pub fn parse_color(color_str: &str) -> Result<StandardColor, Error> {
     for color in StandardColor::iter() {
         if format!("{:?}", color).eq_ignore_ascii_case(color_str) {
             return Ok(color);
         }
     }
-    Err(ConfigError::InvalidColor(color_str.to_string()))
+    Err(Error::InvalidColor(color_str.to_string()))
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -183,7 +164,7 @@ impl Config {
 
 /// Determines the path to the configuration file.
 /// Exposed at crate root as get_config_path_util
-pub fn get_config_path() -> Result<PathBuf, ConfigError> {
+pub fn get_config_path() -> Result<PathBuf, Error> {
     let config_dir_override = std::env::var(CONFIG_ENV_VAR).ok();
 
     let config_dir_path = match config_dir_override {
@@ -200,8 +181,7 @@ pub fn get_config_path() -> Result<PathBuf, ConfigError> {
             path
         }
         None => {
-            let base_config_dir =
-                dirs::config_dir().ok_or(ConfigError::CannotDetermineConfigDir)?;
+            let base_config_dir = dirs::config_dir().ok_or(Error::CannotDetermineConfigDir)?;
             base_config_dir.join(APP_CONFIG_DIR)
         }
     };
@@ -215,7 +195,7 @@ pub fn get_config_path() -> Result<PathBuf, ConfigError> {
 
 /// Loads the configuration from the TOML file at the given path.
 /// Exposed at crate root as load_config_util
-pub fn load_config(config_path: &Path) -> Result<Config, ConfigError> {
+pub fn load_config(config_path: &Path) -> Result<Config, Error> {
     if !config_path.exists() {
         // Don't print here, let caller decide how to inform user
         let default_config = Config::new_default();
@@ -224,7 +204,7 @@ pub fn load_config(config_path: &Path) -> Result<Config, ConfigError> {
     } else {
         let config_content = fs::read_to_string(&config_path)?;
         // Use serde(default) to handle missing fields when parsing
-        let config: Config = toml::from_str(&config_content).map_err(ConfigError::TomlParse)?;
+        let config: Config = toml::from_str(&config_content).map_err(Error::TomlParse)?;
         // No need to manually fill defaults here if using #[serde(default)] on struct and fields
         Ok(config)
     }
@@ -232,13 +212,13 @@ pub fn load_config(config_path: &Path) -> Result<Config, ConfigError> {
 
 /// Saves the configuration to the TOML file.
 /// Exposed at crate root as save_config_util
-pub fn save_config(config_path: &Path, config: &Config) -> Result<(), ConfigError> {
+pub fn save_config(config_path: &Path, config: &Config) -> Result<(), Error> {
     if let Some(parent_dir) = config_path.parent() {
         if !parent_dir.exists() {
             fs::create_dir_all(parent_dir)?;
         }
     }
-    let config_content = toml::to_string_pretty(config).map_err(ConfigError::TomlSerialize)?;
+    let config_content = toml::to_string_pretty(config).map_err(Error::TomlSerialize)?;
     fs::write(config_path, config_content)?;
     Ok(())
 }

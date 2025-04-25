@@ -12,8 +12,8 @@ use task_athlete_lib::{
 fn create_test_service() -> Result<AppService> {
     // Create an in-memory database for testing
     // Need a mutable connection to pass to init_db
-    let mut conn = rusqlite::Connection::open_in_memory()?;
-    task_athlete_lib::db::init_db(&mut conn)?; // Pass mutable conn
+    let conn = rusqlite::Connection::open_in_memory()?;
+    task_athlete_lib::db::init_db(&conn)?; // Pass mutable conn
 
     // Create a default config for testing
     let config = Config {
@@ -41,7 +41,7 @@ fn create_test_service() -> Result<AppService> {
 // This is a bit of a hack because AppService owns its connection.
 fn create_mutable_conn_to_test_db() -> Result<Connection> {
     let mut conn = rusqlite::Connection::open_in_memory()?;
-    task_athlete_lib::db::init_db(&mut conn)?; // Ensure schema is initialized
+    task_athlete_lib::db::init_db(&conn)?; // Ensure schema is initialized
     Ok(conn)
 }
 
@@ -54,10 +54,9 @@ fn test_create_exercise_unique_name() -> Result<()> {
     let result = service.create_exercise("bench press", ExerciseType::Cardio, None);
     assert!(result.is_err());
     // Check for the specific error type/message if desired
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("Exercise name must be unique"));
+    if let Err(result) = result {
+        assert!(result.to_string().contains("Exercise name must be unique"));
+    }
 
     // Try creating with different name
     let result = service.create_exercise("Squat", ExerciseType::Resistance, Some("legs"));
@@ -83,21 +82,22 @@ fn test_exercise_aliases() -> Result<()> {
     // 2. List Aliases
     let aliases = service.list_aliases()?;
     assert_eq!(aliases.len(), 1);
-    assert_eq!(aliases.get("bp").unwrap(), "Barbell Bench Press");
+    assert_eq!(aliases.get("bp"), Some(&"Barbell Bench Press".to_string()));
 
     // 3. Resolve Alias
-    let resolved_def = service.resolve_exercise_identifier("bp")?.unwrap();
-    assert_eq!(resolved_def.name, "Barbell Bench Press");
-    assert_eq!(resolved_def.id, ex_id);
+    let resolved_def = service.resolve_exercise_identifier("bp")?;
+    assert!(resolved_def.is_some());
+    if let Some(resolved_def) = resolved_def {
+        assert_eq!(resolved_def.name, "Barbell Bench Press");
+        assert_eq!(resolved_def.id, ex_id);
+    }
 
     // 4. Try creating duplicate alias
     let result = service.create_alias("bp", "Squat"); // Different exercise, same alias
     assert!(result.is_err());
-    // println!("{:?}",result); // Keep for debugging if needed
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("Alias already exists"));
+    if let Err(result) = result {
+        assert!(result.to_string().contains("Alias already exists"));
+    }
 
     // 5. Try creating alias conflicting with name/id
     let result = service.create_alias("Barbell Bench Press", "Squat"); // Alias conflicts with name

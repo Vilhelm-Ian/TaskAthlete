@@ -2,11 +2,10 @@ bodyweight = 70.0
 units = "metric"
 prompt_for_bodyweight = true
 streak_interval_days = 1
-notify_pb_enabled = true
 notify_pb_weight = true
-notify_pb_reps = true
-notify_pb_duration = true
-notify_pb_distance = true
+notify_pb_reps = false
+notify_pb_duration = false
+notify_pb_distance = false
 
 [theme]
 header_color = "Green"

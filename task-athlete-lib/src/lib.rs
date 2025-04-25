@@ -75,7 +75,8 @@ pub struct PBInfo {
 
 impl PBInfo {
     /// Helper to check if any PB was achieved.
-    pub fn any_pb(&self) -> bool {
+    #[must_use]
+    pub const fn any_pb(&self) -> bool {
         self.achieved_weight_pb
             || self.achieved_reps_pb
             || self.achieved_duration_pb
@@ -124,14 +125,14 @@ impl AppService {
             config::get_config_path().context("Failed to determine configuration file path")?;
         // Use the load_config function from the config module
         let config = config::load_config(&config_path)
-            .context(format!("Failed to load config from {:?}", config_path))?;
+            .context(format!("Failed to load config from {config_path:?}"))?;
 
         let db_path = db::get_db_path().context("Failed to determine database path")?;
-        let mut conn =
+        let conn =
             db::open_db(&db_path) // Use mutable conn for init potentially
-                .with_context(|| format!("Failed to open database at {:?}", db_path))?;
+                .with_context(|| format!("Failed to open database at {db_path:?}"))?;
 
-        db::init_db(&mut conn).context("Failed to initialize database schema")?; // Pass mutable conn
+        db::init_db(&conn).context("Failed to initialize database schema")?; // Pass mutable conn
 
         Ok(Self {
             config,
@@ -351,7 +352,7 @@ impl AppService {
         let canonical_name_to_update = &current_def.name;
 
         // Trim new name if provided
-        let trimmed_new_name = new_name.map(|n| n.trim()).filter(|n| !n.is_empty());
+        let trimmed_new_name = new_name.map(str::trim).filter(|n| !n.is_empty());
         if new_name.is_some() && trimmed_new_name.is_none() {
             bail!("New exercise name cannot be empty if provided.");
         }
@@ -1004,7 +1005,7 @@ impl AppService {
             ..filters // Copy other filters (dates, type, muscle, limit)
         };
 
-        db::calculate_daily_volume_filtered(&self.conn, resolved_filters)
+        db::calculate_daily_volume_filtered(&self.conn, &resolved_filters)
             .context("Failed to calculate workout volume from database")
     }
 

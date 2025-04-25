@@ -1519,7 +1519,7 @@ fn test_get_latest_bodyweight() -> Result<()> {
 #[test]
 fn test_delete_body_weight() -> Result<()> {
     let mut service = create_test_service()?;
-    let id = service.add_bodyweight_entry(Utc::now() - Duration::days(2), 50.0)?;
+    service.add_bodyweight_entry(Utc::now() - Duration::days(2), 50.0)?;
     let result = service.delete_bodyweight(1);
     assert!(result.is_ok());
     let result = service.delete_bodyweight(1);

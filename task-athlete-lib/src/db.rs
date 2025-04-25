@@ -53,7 +53,7 @@ pub struct VolumeFilters<'a> {
 
 pub fn calculate_daily_volume_filtered(
     conn: &Connection,
-    filters: VolumeFilters,
+    filters: &VolumeFilters,
 ) -> Result<Vec<(NaiveDate, String, f64)>, DbError> {
     // Base query calculates volume per workout *entry*
     let mut sql = "
@@ -305,12 +305,10 @@ fn add_distance_column_if_not_exists(conn: &Connection) -> Result<(), DbError> {
     let mut stmt = conn.prepare("PRAGMA table_info(workouts)")?;
     let columns = stmt.query_map([], |row| row.get::<_, String>(1))?;
     let mut distance_exists = false;
-    for column_result in columns {
-        if let Ok(column_name) = column_result {
-            if column_name == "distance" {
-                distance_exists = true;
-                break;
-            }
+    for column_name in columns.flatten() {
+        if column_name == "distance" {
+            distance_exists = true;
+            break;
         }
     }
 

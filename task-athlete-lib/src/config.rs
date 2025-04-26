@@ -49,6 +49,24 @@ pub enum Units {
     Imperial, // e.g., lbs, miles
 }
 
+impl Units {
+    /// Returns the standard abbreviation for weight units.
+    pub const fn weight_abbr(&self) -> &'static str {
+        match self {
+            Units::Metric => "kg",
+            Units::Imperial => "lbs",
+        }
+    }
+
+    /// Returns the standard abbreviation for distance units.
+    pub const fn distance_abbr(&self) -> &'static str {
+        match self {
+            Units::Metric => "km",
+            Units::Imperial => "miles",
+        }
+    }
+}
+
 // Define standard colors using strum for easy iteration/parsing
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter)]
 pub enum StandardColor {

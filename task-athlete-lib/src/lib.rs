@@ -39,8 +39,8 @@ pub use db::{
     WorkoutFilters,
 };
 
-const KM_TO_MILE: f64 = 0.621_371;
-const MILE_TO_KM: f64 = 1.60934;
+pub const KM_TO_MILE: f64 = 0.621_371;
+pub const MILE_TO_KM: f64 = 1.60934;
 
 // Helper struct to hold previous bests internally
 #[derive(Debug)]

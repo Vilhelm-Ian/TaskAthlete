@@ -116,10 +116,10 @@ pub fn calculate_daily_volume_filtered(
         SELECT
             date(w.timestamp) as workout_date,
             w.exercise_name,
-            SUM(CASE
-                    WHEN e.type IN ('resistance', 'body-weight')
-                    THEN COALESCE(w.sets, 1) * COALESCE(w.reps, 0) * COALESCE(w.weight, 0)
-                    ELSE 0
+            SUM(CASE e.type
+                    WHEN 'resistance' THEN COALESCE(w.sets, 1) * COALESCE(w.reps, 0) * COALESCE(w.weight, 0)
+                    WHEN 'body-weight' THEN COALESCE(w.sets, 1) * COALESCE(w.reps, 0) * (COALESCE(w.weight, 0) + COALESCE(w.bodyweight, 0))
+                     ELSE 0
                 END) as daily_volume
         FROM workouts w
         LEFT JOIN exercises e ON w.exercise_name = e.name
@@ -248,9 +248,22 @@ pub struct Workout {
     pub reps: Option<i64>,
     pub weight: Option<f64>,
     pub duration_minutes: Option<i64>,
+    pub bodyweight: Option<f64>,
     pub distance: Option<f64>,
     pub notes: Option<String>,
     pub exercise_type: Option<ExerciseType>, // Populated by JOIN
+}
+
+impl Workout {
+    /// Calculates the effective weight (additional + bodyweight) for calculations.
+    pub fn calculate_effective_weight(&self) -> Option<f64> {
+        match self.exercise_type {
+            Some(ExerciseType::BodyWeight) => {
+                Some(self.weight.unwrap_or(0.0) + self.bodyweight.unwrap_or(0.0))
+            }
+            _ => self.weight, // For Resistance/Cardio, effective weight is just the additional weight
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -259,6 +272,10 @@ pub struct ExerciseDefinition {
     pub name: String,
     pub type_: ExerciseType,
     pub muscles: Option<String>,
+    pub log_weight: bool,
+    pub log_reps: bool,
+    pub log_duration: bool,
+    pub log_distance: bool,
 }
 
 const DB_FILE_NAME: &str = "workouts.sqlite";
@@ -299,7 +316,12 @@ pub fn init(conn: &Connection) -> Result<(), Error> {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL UNIQUE COLLATE NOCASE,
             type TEXT NOT NULL CHECK(type IN ('resistance', 'cardio', 'body-weight')),
-            muscles TEXT
+            muscles TEXT,
+            log_weight BOOLEAN NOT NULL DEFAULT TRUE,
+            log_reps BOOLEAN NOT NULL DEFAULT TRUE,
+            log_duration BOOLEAN NOT NULL DEFAULT TRUE,
+            log_distance BOOLEAN NOT NULL DEFAULT TRUE
+
         );
         CREATE TABLE IF NOT EXISTS workouts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -310,6 +332,7 @@ pub fn init(conn: &Connection) -> Result<(), Error> {
             weight REAL,
             duration_minutes INTEGER,
             distance REAL,
+            bodyweight REAL, -- Bodyweight at time of workout (for BW exercises)
             notes TEXT
         );
         CREATE TABLE IF NOT EXISTS aliases (
@@ -329,7 +352,16 @@ pub fn init(conn: &Connection) -> Result<(), Error> {
     )?;
 
     // Add distance column separately for backward compatibility
+    // Add columns separately for backward compatibility
+    add_bodyweight_column_if_not_exists(conn)?;
     add_distance_column_if_not_exists(conn)?;
+    // Add log flag columns to exercises table separately for backward compatibility
+    // Use defaults consistent with the CREATE TABLE statement (1=TRUE, 0=FALSE)
+    // Or choose defaults based on the most common expected behavior for existing exercises
+    add_log_flag_column_if_not_exists(conn, "log_weight", 1)?; // Default TRUE
+    add_log_flag_column_if_not_exists(conn, "log_reps", 1)?; // Default TRUE
+    add_log_flag_column_if_not_exists(conn, "log_duration", 0)?; // Default FALSE
+    add_log_flag_column_if_not_exists(conn, "log_distance", 0)?; // Default FALSE
 
     Ok(())
 }
@@ -348,12 +380,27 @@ fn add_distance_column_if_not_exists(conn: &Connection) -> Result<(), Error> {
     Ok(())
 }
 
+/// Adds the bodyweight column to the workouts table if it doesn't exist.
+fn add_bodyweight_column_if_not_exists(conn: &Connection) -> Result<(), Error> {
+    let mut stmt = conn.prepare("PRAGMA table_info(workouts)")?;
+    let columns_exist = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .any(|col_res| col_res.map_or(false, |col| col == "bodyweight"));
+
+    if !columns_exist {
+        println!("Adding 'bodyweight' column to workouts table..."); // Inform user
+        conn.execute("ALTER TABLE workouts ADD COLUMN bodyweight REAL", [])?;
+    }
+    Ok(())
+}
+
 pub struct NewWorkoutData<'a> {
     pub exercise_name: &'a str, // Canonical name
     pub timestamp: DateTime<Utc>,
     pub sets: Option<i64>,
     pub reps: Option<i64>,
     pub weight: Option<f64>,
+    pub bodyweight_to_use: Option<f64>, // BW at time of workout
     pub duration: Option<i64>,
     pub distance: Option<f64>,
     pub notes: Option<&'a str>, // Use &str
@@ -372,16 +419,19 @@ pub fn add_workout(conn: &Connection, data: &NewWorkoutData) -> Result<i64, Erro
     let sets_val = data.sets.unwrap_or(1);
 
     let result = conn.execute(
-        "INSERT INTO workouts (timestamp, exercise_name, sets, reps, weight, duration_minutes, distance, notes)
-         VALUES (:ts, :ex_name, :sets, :reps, :weight, :duration, :distance, :notes)",
+        "INSERT INTO workouts (timestamp, exercise_name, sets, reps, weight, duration_minutes, distance, bodyweight, notes)
+         VALUES (:ts, :ex_name, :sets, :reps, :weight, :duration, :distance, :bw, :notes)",
+
         named_params! {
             ":ts": timestamp_str,
             ":ex_name": data.exercise_name,
             ":sets": sets_val,
             ":reps": data.reps,
+            // 'weight' is now only the *additional* weight
             ":weight": data.weight,
             ":duration": data.duration,
             ":distance": data.distance,
+            ":bw": data.bodyweight_to_use,
             ":notes": data.notes,
         },
     ).map_err(Error::InsertFailed)?;
@@ -412,6 +462,7 @@ pub fn update_workout(
         weight: new_weight,
         duration_minutes: new_duration,
         distance: new_distance,
+        bodyweight: new_bodyweight, // Allow updating stored bodyweight
         notes: new_notes,
         ..
     } = workout;
@@ -441,6 +492,10 @@ pub fn update_workout(
     }
     if new_distance.is_some() {
         updates.push("distance = :distance");
+        params_map.insert(":distance".into(), Box::new(new_distance));
+    }
+    if new_bodyweight.is_some() {
+        updates.push("bodyweight = :bodyweight");
         params_map.insert(":distance".into(), Box::new(new_distance));
     }
     if new_notes.is_some() {
@@ -535,6 +590,7 @@ fn map_row_to_workout(row: &Row) -> Result<Workout, rusqlite::Error> {
         weight: row.get("weight")?,
         duration_minutes: row.get("duration_minutes")?,
         distance: row.get("distance")?,
+        bodyweight: row.get("bodyweight")?,
         notes: row.get("notes")?,
         exercise_type,
     })
@@ -562,7 +618,7 @@ pub fn list_workouts_filtered(
     conn: &Connection,
     filters: &WorkoutFilters,
 ) -> Result<Vec<Workout>, Error> {
-    let mut sql = "SELECT w.id, w.timestamp, w.exercise_name, w.sets, w.reps, w.weight, w.duration_minutes, w.distance, w.notes, e.type
+    let mut sql = "SELECT w.id, w.timestamp, w.exercise_name, w.sets, w.reps, w.weight, w.duration_minutes, w.distance, w.bodyweight, w.notes, e.type
                    FROM workouts w LEFT JOIN exercises e ON w.exercise_name = e.name WHERE 1=1".to_string();
     let mut params_map: HashMap<String, Box<dyn ToSql>> = HashMap::new();
 
@@ -641,7 +697,8 @@ pub fn list_workouts_for_exercise_on_nth_last_day(
                     WHERE exercise_name = :ex_name COLLATE NOCASE
                     ORDER BY workout_date DESC LIMIT 1 OFFSET :offset
                 )
-                SELECT w.id, w.timestamp, w.exercise_name, w.sets, w.reps, w.weight, w.duration_minutes, w.distance, w.notes, e.type
+                SELECT w.id, w.timestamp, w.exercise_name, w.sets, w.reps, w.weight, w.duration_minutes, w.distance, w.bodyweight, w.notes, e.type
+
                 FROM workouts w
                 LEFT JOIN exercises e ON w.exercise_name = e.name
                 JOIN RankedDays rd ON date(w.timestamp) = rd.workout_date
@@ -666,8 +723,12 @@ pub fn list_workouts_for_exercise_on_nth_last_day(
 /// # Arguments
 /// * `conn` - A reference to the database connection.
 /// * `name` - The name of the new exercise.
-/// * `type_` - The `ExerciseType`.
+/// * `ex_type` - The `ExerciseType`.
 /// * `muscles` - An optional comma-separated string of muscles.
+/// * `log_weight` - Optional override for logging weight (defaults based on type).
+/// * `log_reps` - Optional override for logging reps (defaults based on type).
+/// * `log_duration` - Optional override for logging duration (defaults based on type).
+/// * `log_distance` - Optional override for logging distance (defaults based on type).
 /// # Returns
 /// The `rowid` of the newly inserted exercise definition.
 /// # Errors
@@ -676,28 +737,64 @@ pub fn list_workouts_for_exercise_on_nth_last_day(
 pub fn create_exercise(
     conn: &Connection,
     name: &str,
-    type_: &ExerciseType,
+    ex_type: &ExerciseType,
     muscles: Option<&str>,
+    log_weight: Option<bool>,
+    log_reps: Option<bool>,
+    log_duration: Option<bool>,
+    log_distance: Option<bool>,
 ) -> Result<i64, Error> {
-    let type_str = type_.to_string();
+    let type_str = ex_type.to_string();
+
+    // Determine default log flags based on type
+    let (default_log_w, default_log_r, default_log_dur, default_log_dist) = match ex_type {
+        ExerciseType::Resistance | ExerciseType::BodyWeight => (true, true, false, false),
+        ExerciseType::Cardio => (false, false, true, true),
+    };
+
+    let final_log_w = log_weight.unwrap_or(default_log_w);
+    let final_log_r = log_reps.unwrap_or(default_log_r);
+    let final_log_dur = log_duration.unwrap_or(default_log_dur);
+    let final_log_dist = log_distance.unwrap_or(default_log_dist);
+
     match conn.execute(
-        "INSERT INTO exercises (name, type, muscles) VALUES (?1, ?2, ?3)",
-        params![name, type_str, muscles],
+        "INSERT INTO exercises (name, type, muscles, log_weight, log_reps, log_duration, log_distance)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            name,
+            type_str,
+            muscles,
+            final_log_w,
+            final_log_r,
+            final_log_dur,
+            final_log_dist
+        ],
     ) {
         Ok(_) => Ok(conn.last_insert_rowid()),
         Err(e) => {
-            if let rusqlite::Error::SqliteFailure(
+            // Check if the error is specifically a unique constraint violation on the name column.
+            // A generic ConstraintViolation could be for other reasons (like a NOT NULL constraint,
+            // although the schema *should* allow NULL muscles, testing might reveal unexpected behavior).
+            if let rusqlite::Error::SqliteFailure( // Pattern match on the error type
                 rusqlite::ffi::Error {
                     code: rusqlite::ErrorCode::ConstraintViolation,
                     ..
                 },
-                _,
-            ) = e
+                Some(msg), // Get the attached message, which often contains details
+            ) = &e // Borrow `e` to check its parts without consuming it
             {
-                Err(Error::ExerciseNameNotUnique(name.to_string()))
-            } else {
-                Err(Error::InsertFailed(e))
+                // Check if the message specifically mentions a unique constraint or the exercises.name column
+                // SQLite messages for unique constraint are usually "UNIQUE constraint failed: table.column"
+                let msg_lower = msg.to_lowercase();
+                if msg_lower.contains("unique constraint failed") || msg_lower.contains("exercises.name") {
+                     return Err(Error::ExerciseNameNotUnique(name.to_string()));
+                }
+                // If it's a different constraint violation (e.g., NOT NULL on muscles if the schema
+                // was somehow misapplied or interpreted), fall through to the general InsertFailed.
             }
+            // If it's not the unique name constraint, or not a ConstraintViolation at all,
+            // map it to the general InsertFailed error.
+            Err(Error::InsertFailed(e))
         }
     }
 }
@@ -709,6 +806,10 @@ pub fn create_exercise(
 /// * `new_name` - Optional new name.
 /// * `new_type` - Optional new `ExerciseType`.
 /// * `new_muscles` - Optional `Option<&str>` for muscles.
+/// * `new_log_weight` - Optional flag.
+/// * `new_log_reps` - Optional flag.
+/// * `new_log_duration` - Optional flag.
+/// * `new_log_distance` - Optional flag.
 /// # Returns
 /// The number of rows affected in `exercises` table (should be 1).
 /// # Errors
@@ -723,6 +824,10 @@ pub fn update_exercise(
     new_name: Option<&str>,
     new_type: Option<&ExerciseType>,
     new_muscles: Option<Option<&str>>,
+    new_log_weight: Option<bool>,
+    new_log_reps: Option<bool>,
+    new_log_duration: Option<bool>,
+    new_log_distance: Option<bool>,
 ) -> Result<u64, Error> {
     let exercise = get_exercise_by_name(conn, canonical_name_to_update)?
         .ok_or_else(|| Error::ExerciseNotFound(canonical_name_to_update.to_string()))?;
@@ -746,6 +851,22 @@ pub fn update_exercise(
     if let Some(m_opt) = new_muscles {
         updates.push("muscles = :muscles");
         params_map.insert(":muscles".into(), Box::new(m_opt));
+    }
+    if let Some(b) = new_log_weight {
+        updates.push("log_weight = :log_w");
+        params_map.insert(":log_w".into(), Box::new(b));
+    }
+    if let Some(b) = new_log_reps {
+        updates.push("log_reps = :log_r");
+        params_map.insert(":log_r".into(), Box::new(b));
+    }
+    if let Some(b) = new_log_duration {
+        updates.push("log_duration = :log_dur");
+        params_map.insert(":log_dur".into(), Box::new(b));
+    }
+    if let Some(b) = new_log_distance {
+        updates.push("log_distance = :log_dist");
+        params_map.insert(":log_dist".into(), Box::new(b));
     }
 
     if updates.is_empty() {
@@ -851,6 +972,10 @@ fn map_row_to_exercise_definition(row: &Row) -> Result<ExerciseDefinition, rusql
         name: row.get("name")?,
         type_: ex_type,
         muscles: row.get("muscles")?,
+        log_weight: row.get("log_weight")?,
+        log_reps: row.get("log_reps")?,
+        log_duration: row.get("log_duration")?,
+        log_distance: row.get("log_distance")?,
     })
 }
 
@@ -868,7 +993,10 @@ pub fn get_exercise_by_name(
     name: &str,
 ) -> Result<Option<ExerciseDefinition>, Error> {
     let mut stmt = conn
-        .prepare("SELECT id, name, type, muscles FROM exercises WHERE name = ?1 COLLATE NOCASE")
+        .prepare(
+            "SELECT id, name, type, muscles, log_weight, log_reps, log_duration, log_distance
+             FROM exercises WHERE name = ?1 COLLATE NOCASE",
+        )
         .map_err(Error::QueryFailed)?;
     stmt.query_row(params![name], map_row_to_exercise_definition)
         .optional()
@@ -886,7 +1014,10 @@ pub fn get_exercise_by_name(
 /// - `Error::Conversion`: If exercise type conversion fails.
 pub fn get_exercise_by_id(conn: &Connection, id: i64) -> Result<Option<ExerciseDefinition>, Error> {
     let mut stmt = conn
-        .prepare("SELECT id, name, type, muscles FROM exercises WHERE id = ?1")
+        .prepare(
+            "SELECT id, name, type, muscles, log_weight, log_reps, log_duration, log_distance
+             FROM exercises WHERE id = ?1",
+        )
         .map_err(Error::QueryFailed)?;
     stmt.query_row(params![id], map_row_to_exercise_definition)
         .optional()
@@ -1046,7 +1177,9 @@ pub fn list_exercises(
     type_filter: Option<ExerciseType>,
     muscle_filter: Option<&str>,
 ) -> Result<Vec<ExerciseDefinition>, Error> {
-    let mut sql = "SELECT id, name, type, muscles FROM exercises WHERE 1=1".to_string();
+    let mut sql = "SELECT id, name, type, muscles, log_weight, log_reps, log_duration, log_distance
+                   FROM exercises WHERE 1=1"
+        .to_string();
     let mut params_map: HashMap<String, Box<dyn ToSql>> = HashMap::new();
 
     if let Some(t) = type_filter {
@@ -1074,22 +1207,34 @@ pub fn list_exercises(
         .map_err(map_collect_error)
 }
 
-/// Gets the maximum weight lifted for a specific exercise.
+/// Gets the maximum *effective* weight lifted for a specific exercise.
+/// Effective weight = additional weight + bodyweight (for BW exercises) OR just additional weight.
 /// # Arguments
 /// * `conn` - A reference to the database connection.
 /// * `canonical_exercise_name` - The canonical name.
 /// # Returns
-/// An `Ok(Some(f64))` with max weight, `Ok(None)` if no entries.
+/// An `Ok(Some(f64))` with max effective weight, `Ok(None)` if no relevant entries.
 /// # Errors
 /// - `Error::QueryFailed`: If the query fails.
-pub fn get_max_weight_for_exercise(
+pub fn get_max_effective_weight_for_exercise(
     conn: &Connection,
     canonical_exercise_name: &str,
 ) -> Result<Option<f64>, Error> {
     conn.query_row(
-        "SELECT MAX(weight) FROM workouts WHERE exercise_name = ?1 COLLATE NOCASE AND weight IS NOT NULL",
-        params![canonical_exercise_name], |row| row.get(0),
-    ).optional().map_err(Error::QueryFailed).map(Option::flatten)
+        "SELECT MAX(
+             CASE e.type
+                 WHEN 'body-weight' THEN COALESCE(w.weight, 0) + COALESCE(w.bodyweight, 0)
+                 ELSE w.weight
+             END
+         )
+         FROM workouts w JOIN exercises e ON w.exercise_name = e.name COLLATE NOCASE
+         WHERE w.exercise_name = ?1 COLLATE NOCASE",
+        params![canonical_exercise_name],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(Error::QueryFailed)
+    .map(Option::flatten)
 }
 
 /// Gets the maximum reps performed for a specific exercise.
@@ -1355,4 +1500,29 @@ pub fn list_all_muscles(conn: &Connection) -> Result<Vec<String>, Error> {
     let mut sorted_muscles: Vec<String> = unique_muscles.into_iter().collect();
     sorted_muscles.sort_unstable();
     Ok(sorted_muscles)
+}
+
+/// Adds a boolean log flag column to the exercises table if it doesn't exist.
+fn add_log_flag_column_if_not_exists(
+    conn: &Connection,
+    column_name: &str,
+    default_value: i64,
+) -> Result<(), Error> {
+    // Check if column exists using PRAGMA
+    let mut stmt = conn.prepare("PRAGMA table_info(exercises)")?;
+    let column_exists = stmt
+        .query_map([], |row| row.get::<_, String>(1))? // Column names are in the second column (index 1)
+        .any(|col_res| col_res.map_or(false, |col| col == column_name));
+
+    // Add column if it doesn't exist
+    if !column_exists {
+        // SQLite uses 0 for FALSE and 1 for TRUE for BOOLEAN columns
+        // We add NOT NULL and a DEFAULT to ensure existing rows get a value
+        let sql = format!(
+            "ALTER TABLE exercises ADD COLUMN {} BOOLEAN NOT NULL DEFAULT {}",
+            column_name, default_value
+        );
+        conn.execute(&sql, [])?;
+    }
+    Ok(())
 }

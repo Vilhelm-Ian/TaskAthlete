@@ -45,10 +45,10 @@ fn create_test_service() -> Result<AppService> {
 #[test]
 fn test_create_exercise_unique_name() -> Result<()> {
     let service = create_test_service()?;
-    service.create_exercise("Bench Press", ExerciseType::Resistance, Some("chest"))?;
+    service.create_exercise("Bench Press", ExerciseType::Resistance, None, Some("chest"))?;
 
     // Try creating with same name (case-insensitive)
-    let result = service.create_exercise("bench press", ExerciseType::Cardio, None);
+    let result = service.create_exercise("bench press", ExerciseType::Cardio, None, None);
     assert!(result.is_err());
     if let Err(e) = result {
         assert!(e.to_string().contains("Exercise name must be unique"));
@@ -60,7 +60,7 @@ fn test_create_exercise_unique_name() -> Result<()> {
     }
 
     // Try creating with different name
-    let result = service.create_exercise("Squat", ExerciseType::Resistance, Some("legs"));
+    let result = service.create_exercise("Squat", ExerciseType::Resistance, None, Some("legs"));
     assert!(result.is_ok());
 
     Ok(())
@@ -73,9 +73,10 @@ fn test_exercise_aliases() -> Result<()> {
     let ex_id = service.create_exercise(
         "Barbell Bench Press",
         ExerciseType::Resistance,
+        None,
         Some("chest"),
     )?;
-    service.create_exercise("Squat", ExerciseType::Resistance, Some("Legs"))?;
+    service.create_exercise("Squat", ExerciseType::Resistance, None, Some("Legs"))?;
 
     // 1. Create Alias
     service.create_alias("bp", "Barbell Bench Press")?;
@@ -158,7 +159,7 @@ fn test_exercise_aliases() -> Result<()> {
 fn test_edit_exercise_with_alias_and_name_change() -> Result<()> {
     let mut service = create_test_service()?;
 
-    service.create_exercise("Old Name", ExerciseType::Resistance, Some("muscle1"))?;
+    service.create_exercise("Old Name", ExerciseType::Resistance, None, Some("muscle1"))?;
     service.create_alias("on", "Old Name")?;
 
     // Add a workout using the alias
@@ -182,6 +183,7 @@ fn test_edit_exercise_with_alias_and_name_change() -> Result<()> {
     service.edit_exercise(
         "on", // Identify by alias
         Some("New Name"),
+        None,
         None,                          // Keep type
         Some(Some("muscle1,muscle2")), // Change muscles
     )?;
@@ -244,7 +246,7 @@ fn test_edit_exercise_with_alias_and_name_change() -> Result<()> {
 #[test]
 fn test_delete_exercise_with_alias() -> Result<()> {
     let mut service = create_test_service()?;
-    service.create_exercise("To Delete", ExerciseType::Cardio, None)?;
+    service.create_exercise("To Delete", ExerciseType::Cardio, None, None)?;
     service.create_alias("td", "To Delete")?;
 
     // Delete exercise using alias
@@ -265,7 +267,12 @@ fn test_delete_exercise_with_alias() -> Result<()> {
 #[test]
 fn test_add_workout_past_date() -> Result<()> {
     let mut service = create_test_service()?;
-    service.create_exercise("Rowing", ExerciseType::Cardio, None)?;
+    let res = service.list_exercises(None, None);
+    println!("here");
+    res.unwrap_or(Vec::new())
+        .into_iter()
+        .for_each(|a| println!("{}", a.name));
+    service.create_exercise("Rowing", ExerciseType::Cardio, None, None)?;
 
     let yesterday = Utc::now() - Duration::days(1);
     let two_days_ago = Utc::now() - Duration::days(2);
@@ -327,7 +334,7 @@ fn test_add_workout_past_date() -> Result<()> {
 #[test]
 fn test_edit_workout_date() -> Result<()> {
     let mut service = create_test_service()?;
-    service.create_exercise("Push-ups", ExerciseType::BodyWeight, None)?;
+    service.create_exercise("Push-ups", ExerciseType::BodyWeight, None, None)?;
     let today = Utc::now();
     let yesterday = today - Duration::days(1);
 
@@ -346,17 +353,10 @@ fn test_edit_workout_date() -> Result<()> {
     })?;
 
     // Edit the date
-    service.edit_workout(EditWorkoutParams {
-        id: workout_id,
-        new_date: Some(yesterday.date_naive()),
-        new_exercise_identifier: None,
-        new_sets: None,
-        new_reps: None,
-        new_weight: None,
-        new_duration: None,
-        new_distance_arg: None,
-        new_notes: None,
-    })?;
+    let mut params = EditWorkoutParams::default();
+    params.id = workout_id;
+    params.new_date = Some(yesterday.date_naive());
+    service.edit_workout(params)?;
 
     // Verify date change by listing
     let workouts_today = service.list_workouts(&WorkoutFilters {
@@ -383,8 +383,13 @@ fn test_edit_workout_date() -> Result<()> {
 #[test]
 fn test_pb_detection_and_config() -> Result<()> {
     let mut service = create_test_service()?; // Uses test default config (all PBs enabled)
-    service.create_exercise("Deadlift", ExerciseType::Resistance, Some("back,legs"))?;
-    service.create_exercise("Running", ExerciseType::Cardio, Some("legs"))?;
+    service.create_exercise(
+        "Deadlift",
+        ExerciseType::Resistance,
+        None,
+        Some("back,legs"),
+    )?;
+    service.create_exercise("Running", ExerciseType::Cardio, None, Some("legs"))?;
     let today = Utc::now();
 
     // Helper macro for adding workout
@@ -553,10 +558,16 @@ fn test_create_and_list_exercises() -> Result<()> {
     service.create_exercise(
         "Bench Press",
         ExerciseType::Resistance,
+        None,
         Some("chest,triceps"),
     )?;
-    service.create_exercise("Running", ExerciseType::Cardio, Some("legs"))?;
-    service.create_exercise("Pull-ups", ExerciseType::BodyWeight, Some("back,biceps"))?;
+    service.create_exercise("Running", ExerciseType::Cardio, None, Some("legs"))?;
+    service.create_exercise(
+        "Pull-ups",
+        ExerciseType::BodyWeight,
+        None,
+        Some("back,biceps"),
+    )?;
 
     // List all
     let exercises = service.list_exercises(None, None)?;
@@ -630,6 +641,7 @@ fn test_list_filter_with_alias() -> Result<()> {
     service.create_exercise(
         "Overhead Press",
         ExerciseType::Resistance,
+        None,
         Some("shoulders"),
     )?;
     service.create_alias("ohp", "Overhead Press")?;
@@ -673,7 +685,7 @@ fn test_add_and_list_workouts_with_distance() -> Result<()> {
     let mut service = create_test_service()?;
     service.config.units = Units::Metric; // Use Metric for easy km verification
 
-    service.create_exercise("Running", ExerciseType::Cardio, Some("legs"))?;
+    service.create_exercise("Running", ExerciseType::Cardio, None, Some("legs"))?;
     let naive_date = NaiveDate::from_ymd_opt(2023, 6, 2).unwrap();
     let naive_datetime = naive_date.and_hms_opt(0, 0, 0).unwrap();
     let date1: DateTime<Utc> = DateTime::from_naive_utc_and_offset(naive_datetime, Utc);
@@ -732,7 +744,7 @@ fn test_add_workout_imperial_distance() -> Result<()> {
     let mut service = create_test_service()?;
     service.config.units = Units::Imperial; // Set units to Imperial
 
-    service.create_exercise("Cycling", ExerciseType::Cardio, None)?;
+    service.create_exercise("Cycling", ExerciseType::Cardio, None, None)?;
     let today = Utc::now();
 
     let miles_input = 10.0;
@@ -768,7 +780,7 @@ fn test_add_workout_imperial_distance() -> Result<()> {
 fn test_edit_workout_distance() -> Result<()> {
     let mut service = create_test_service()?;
     service.config.units = Units::Metric;
-    service.create_exercise("Walking", ExerciseType::Cardio, None)?;
+    service.create_exercise("Walking", ExerciseType::Cardio, None, None)?;
     let today = Utc::now();
 
     let (workout_id, _) = service.add_workout(AddWorkoutParams {
@@ -787,17 +799,10 @@ fn test_edit_workout_distance() -> Result<()> {
 
     // Edit distance (Metric input)
     let new_distance_km = 7.5;
-    service.edit_workout(EditWorkoutParams {
-        id: workout_id,
-        new_distance_arg: Some(new_distance_km),
-        new_exercise_identifier: None,
-        new_sets: None,
-        new_reps: None,
-        new_weight: None,
-        new_duration: None,
-        new_notes: None,
-        new_date: None,
-    })?;
+    let mut params = EditWorkoutParams::default();
+    params.id = workout_id;
+    params.new_distance_arg = Some(new_distance_km);
+    service.edit_workout(params)?;
 
     // Verify (stored value is km)
     let workouts = service.list_workouts(&WorkoutFilters {
@@ -812,17 +817,10 @@ fn test_edit_workout_distance() -> Result<()> {
     service.config.units = Units::Imperial;
     let imperial_input = 2.0; // 2 miles
     let expected_km_edit = imperial_input * 1.60934;
-    service.edit_workout(EditWorkoutParams {
-        id: workout_id,
-        new_distance_arg: Some(imperial_input), // Input miles
-        new_exercise_identifier: None,
-        new_sets: None,
-        new_reps: None,
-        new_weight: None,
-        new_duration: None,
-        new_notes: None,
-        new_date: None,
-    })?;
+    let mut params = EditWorkoutParams::default();
+    params.id = workout_id;
+    params.new_distance_arg = Some(imperial_input);
+    service.edit_workout(params)?;
 
     // Verify stored km
     let workouts_imperial_edit = service.list_workouts(&WorkoutFilters {
@@ -841,7 +839,7 @@ fn test_bodyweight_workouts() -> Result<()> {
     let mut service = create_test_service()?;
     // Bodyweight is set to Some(70.0) in create_test_service
 
-    service.create_exercise("Pull-ups", ExerciseType::BodyWeight, Some("back"))?;
+    service.create_exercise("Pull-ups", ExerciseType::BodyWeight, None, Some("back"))?;
     let naive_date = NaiveDate::from_ymd_opt(2023, 6, 2).unwrap();
     let naive_datetime = naive_date.and_hms_opt(0, 0, 0).unwrap();
     let day1: DateTime<Utc> = DateTime::from_naive_utc_and_offset(naive_datetime, Utc);
@@ -856,7 +854,7 @@ fn test_bodyweight_workouts() -> Result<()> {
         duration: None,
         distance: None,
         notes: None,
-        implicit_type: None,
+        implicit_type: Some(ExerciseType::BodyWeight),
         implicit_muscles: None,
         bodyweight_to_use: Some(70.0), // Explicitly pass BW for test clarity
     })?;
@@ -868,7 +866,8 @@ fn test_bodyweight_workouts() -> Result<()> {
     })?;
 
     assert_eq!(workouts.len(), 1);
-    assert_eq!(workouts[0].weight, Some(75.0)); // 70 + 5
+    println!("here");
+    assert_eq!(workouts[0].calculate_effective_weight(), Some(75.0)); // 70 + 5
 
     Ok(())
 }
@@ -877,13 +876,14 @@ fn test_bodyweight_workouts() -> Result<()> {
 fn test_edit_exercise() -> Result<()> {
     let mut service = create_test_service()?;
 
-    service.create_exercise("Bench Press", ExerciseType::Resistance, Some("chest"))?;
+    service.create_exercise("Bench Press", ExerciseType::Resistance, None, Some("chest"))?;
 
     // Edit the exercise
     service.edit_exercise(
         "Bench Press",
         Some("Barbell Bench Press"),
-        Some(ExerciseType::Resistance),        // Keep type
+        Some(ExerciseType::Resistance),
+        None,                                  // Keep type
         Some(Some("chest,triceps,shoulders")), // Update muscles
     )?;
 
@@ -898,7 +898,7 @@ fn test_edit_exercise() -> Result<()> {
     );
 
     // Try editing non-existent exercise
-    let edit_result = service.edit_exercise("NonExistent", Some("WontWork"), None, None);
+    let edit_result = service.edit_exercise("NonExistent", Some("WontWork"), None, None, None);
     assert!(edit_result.is_err());
     assert!(matches!(
         edit_result.unwrap_err().downcast_ref::<DbError>(),
@@ -912,7 +912,7 @@ fn test_edit_exercise() -> Result<()> {
 fn test_delete_exercise() -> Result<()> {
     let mut service = create_test_service()?;
 
-    service.create_exercise("Bench Press", ExerciseType::Resistance, Some("chest"))?;
+    service.create_exercise("Bench Press", ExerciseType::Resistance, None, Some("chest"))?;
 
     // Delete it
     let result = service.delete_exercise(&["Bench Press".to_string()])?;
@@ -937,8 +937,8 @@ fn test_delete_exercise() -> Result<()> {
 fn test_workout_filters() -> Result<()> {
     let mut service = create_test_service()?;
 
-    service.create_exercise("Running", ExerciseType::Cardio, Some("legs"))?;
-    service.create_exercise("Curl", ExerciseType::Resistance, Some("Biceps"))?;
+    service.create_exercise("Running", ExerciseType::Cardio, None, Some("legs"))?;
+    service.create_exercise("Curl", ExerciseType::Resistance, None, Some("Biceps"))?;
     let naive_date = NaiveDate::from_ymd_opt(2023, 6, 3).unwrap();
     let naive_datetime = naive_date.and_hms_opt(0, 0, 0).unwrap();
     let date1: DateTime<Utc> = DateTime::from_naive_utc_and_offset(naive_datetime, Utc);
@@ -1018,7 +1018,7 @@ fn test_workout_filters() -> Result<()> {
 #[test]
 fn test_nth_last_day_workouts() -> Result<()> {
     let mut service = create_test_service()?;
-    service.create_exercise("Squats", ExerciseType::Resistance, Some("legs"))?;
+    service.create_exercise("Squats", ExerciseType::Resistance, None, Some("legs"))?;
     let date1 = NaiveDate::from_ymd_opt(2023, 6, 2).unwrap();
     let naive_datetime = date1.and_hms_opt(0, 0, 0).unwrap();
     let date1: DateTime<Utc> = DateTime::from_naive_utc_and_offset(naive_datetime, Utc);
@@ -1122,7 +1122,7 @@ fn test_exercise_not_found() -> Result<()> {
     assert!(result.is_ok() && result?.is_none()); // Should be Ok(None)
 
     // Try to edit non-existent exercise
-    let result = service.edit_exercise("Non-existent", None, None, None);
+    let result = service.edit_exercise("Non-existent", None, None, None, None);
     assert!(result.is_err());
     assert!(matches!(
         result.unwrap_err().downcast_ref::<DbError>(),
@@ -1240,10 +1240,10 @@ fn test_workout_volume() -> Result<()> {
     let naive_datetime = day2.and_hms_opt(0, 0, 0).unwrap();
     let day2: DateTime<Utc> = DateTime::from_naive_utc_and_offset(naive_datetime, Utc);
 
-    service.create_exercise("Bench Press", ExerciseType::Resistance, Some("chest"))?;
-    service.create_exercise("Pull-ups", ExerciseType::BodyWeight, Some("back"))?;
-    service.create_exercise("Running", ExerciseType::Cardio, Some("legs"))?;
-    service.create_exercise("Squats", ExerciseType::Resistance, Some("legs"))?;
+    service.create_exercise("Bench Press", ExerciseType::Resistance, None, Some("chest"))?;
+    service.create_exercise("Pull-ups", ExerciseType::BodyWeight, None, Some("back"))?;
+    service.create_exercise("Running", ExerciseType::Cardio, None, Some("legs"))?;
+    service.create_exercise("Squats", ExerciseType::Resistance, None, Some("legs"))?;
 
     // Helper
     let mut add_workout = |params: AddWorkoutParams| service.add_workout(params);
@@ -1418,7 +1418,12 @@ fn test_exercise_stats() -> Result<()> {
     let naive_datetime = day5.and_hms_opt(0, 0, 0).unwrap();
     let day5: DateTime<Utc> = DateTime::from_naive_utc_and_offset(naive_datetime, Utc);
 
-    service.create_exercise("Test Stats", ExerciseType::Resistance, None)?;
+    service.create_exercise(
+        "Test Stats",
+        ExerciseType::Resistance,
+        Some((Some(true), Some(true), Some(true), Some(true))),
+        None,
+    )?;
 
     // Helper
     let mut add_test_workout = |date: DateTime<Utc>,
@@ -1496,7 +1501,7 @@ fn test_exercise_stats() -> Result<()> {
     assert_eq!(stats_2day.longest_streak, 3);
 
     // --- Test Edge Cases ---
-    service.create_exercise("No Workouts", ExerciseType::Cardio, None)?;
+    service.create_exercise("No Workouts", ExerciseType::Cardio, None, None)?;
     let no_workout_result = service.get_exercise_stats("No Workouts");
     assert!(no_workout_result.is_err());
     assert!(matches!(
@@ -1505,7 +1510,7 @@ fn test_exercise_stats() -> Result<()> {
     ));
 
     // Test one workout
-    service.create_exercise("One Workout", ExerciseType::Resistance, None)?;
+    service.create_exercise("One Workout", ExerciseType::Resistance, None, None)?;
     let day_single = NaiveDate::from_ymd_opt(2023, 11, 1).unwrap();
     let naive_datetime = day_single.and_hms_opt(0, 0, 0).unwrap();
     let day_single: DateTime<Utc> = DateTime::from_naive_utc_and_offset(naive_datetime, Utc);
@@ -1579,7 +1584,7 @@ fn test_delete_body_weight() -> Result<()> {
 #[test]
 fn test_bodyweight_workout_needs_log() -> Result<()> {
     let mut service = create_test_service()?;
-    service.create_exercise("Pull-ups", ExerciseType::BodyWeight, Some("back"))?;
+    service.create_exercise("Pull-ups", ExerciseType::BodyWeight, None, Some("back"))?;
 
     // Test config BW initially None
     service.config.bodyweight = None;
@@ -1634,7 +1639,7 @@ fn test_bodyweight_workout_needs_log() -> Result<()> {
     })?;
     assert_eq!(workouts.len(), 1);
     assert_eq!(workouts[0].id, id);
-    assert_eq!(workouts[0].weight, Some(85.0)); // 75.0 (logged) + 10.0 (additional)
+    assert_eq!(workouts[0].calculate_effective_weight(), Some(85.0)); // 75.0 (logged) + 10.0 (additional)
 
     Ok(())
 }
@@ -1713,7 +1718,7 @@ fn get_all_dates_exercised() -> Result<()> {
     let naive_datetime = today.and_hms_opt(0, 0, 0).unwrap();
     let today: DateTime<Utc> = DateTime::from_naive_utc_and_offset(naive_datetime, Utc);
     let yesterday = today - Duration::days(1);
-    service.create_exercise("Bench Press", ExerciseType::Resistance, Some("chest"))?;
+    service.create_exercise("Bench Press", ExerciseType::Resistance, None, Some("chest"))?;
 
     // Helper
     let mut add_bench = |date: DateTime<Utc>| -> Result<()> {
@@ -1759,8 +1764,8 @@ fn test_graph_data_fetching() -> Result<()> {
     let naive_datetime = day3.and_hms_opt(0, 0, 0).unwrap();
     let day3: DateTime<Utc> = DateTime::from_naive_utc_and_offset(naive_datetime, Utc);
 
-    service.create_exercise("Bench Press", ExerciseType::Resistance, Some("chest"))?;
-    service.create_exercise("Running", ExerciseType::Cardio, Some("legs"))?;
+    service.create_exercise("Bench Press", ExerciseType::Resistance, None, Some("chest"))?;
+    service.create_exercise("Running", ExerciseType::Cardio, None, Some("legs"))?;
 
     // Helper
     let mut add_workout = |params: AddWorkoutParams| -> Result<()> {
@@ -1878,7 +1883,7 @@ fn test_graph_data_fetching() -> Result<()> {
     assert!((distance_data_imperial[1].1 - (5.5 * 0.621_371)).abs() < 0.01); // miles
 
     // Test for exercise with no data
-    service.create_exercise("Untouched", ExerciseType::Resistance, None)?;
+    service.create_exercise("Untouched", ExerciseType::Resistance, None, None)?;
     let no_data = service.get_data_for_graph("Untouched", GraphType::MaxWeight)?;
     assert!(no_data.is_empty());
 
@@ -1895,23 +1900,36 @@ fn test_list_all_muscles() -> Result<()> {
     service.create_exercise(
         "Bench Press",
         ExerciseType::Resistance,
+        None,
         Some("Chest, Triceps"),
     )?;
     service.create_exercise(
         "Squat",
         ExerciseType::Resistance,
+        None,
         Some("Legs, Glutes, Core"),
     )?;
-    service.create_exercise("Pull-ups", ExerciseType::BodyWeight, Some("back, Biceps "))?;
-    service.create_exercise("Rows", ExerciseType::Resistance, Some("Back, Rear Delts"))?;
-    service.create_exercise("Running", ExerciseType::Cardio, Some("Legs"))?;
-    service.create_exercise("Crunches", ExerciseType::BodyWeight, Some("core"))?;
-    service.create_exercise("Empty Muscle", ExerciseType::Resistance, Some(""))?;
-    service.create_exercise("Null Muscle", ExerciseType::Resistance, None)?;
-    service.create_exercise("Just Comma", ExerciseType::Resistance, Some(","))?;
+    service.create_exercise(
+        "Pull-ups",
+        ExerciseType::BodyWeight,
+        None,
+        Some("back, Biceps "),
+    )?;
+    service.create_exercise(
+        "Rows",
+        ExerciseType::Resistance,
+        None,
+        Some("Back, Rear Delts"),
+    )?;
+    service.create_exercise("Running", ExerciseType::Cardio, None, Some("Legs"))?;
+    service.create_exercise("Crunches", ExerciseType::BodyWeight, None, Some("core"))?;
+    service.create_exercise("Empty Muscle", ExerciseType::Resistance, None, Some(""))?;
+    service.create_exercise("Null Muscle", ExerciseType::Resistance, None, None)?;
+    service.create_exercise("Just Comma", ExerciseType::Resistance, None, Some(","))?;
     service.create_exercise(
         "Leading Comma",
         ExerciseType::Resistance,
+        None,
         Some(",shoulders"),
     )?;
 
@@ -1928,6 +1946,148 @@ fn test_list_all_muscles() -> Result<()> {
         "triceps",
     ];
     assert_eq!(muscles, expected_muscles);
+
+    Ok(())
+}
+
+#[test]
+fn test_log_flag_restrictions() -> Result<()> {
+    let mut service = create_test_service()?;
+
+    // Create a "Plank" exercise definition: log duration only (weight/reps/distance = false)
+    // The log_flags tuple is (log_weight, log_reps, log_duration, log_distance)
+    service.create_exercise(
+        "Plank",
+        ExerciseType::BodyWeight, // Type won't strictly matter for log flags, but semantically correct
+        Some((Some(false), Some(false), Some(true), Some(false))),
+        Some("core"),
+    )?;
+
+    // Get required bodyweight for BodyWeight exercise (assuming it's available in config or logged)
+    // We provide this to avoid triggering the "bodyweight needed" error in this test,
+    // as we want to test the *log flag* errors.
+    service.set_bodyweight(70.0)?; // Ensure config has BW set
+    let bodyweight_val = service.get_required_bodyweight()?;
+
+    // --- Attempt 1: Add workout with only allowed data (duration) ---
+    let allowed_result = service.add_workout(AddWorkoutParams {
+        exercise_identifier: "Plank",
+        date: Utc::now(),
+        duration: Some(60),                      // This is allowed
+        bodyweight_to_use: Some(bodyweight_val), // Required for BW type
+        ..Default::default()                     // No weight, reps, distance provided
+    });
+    assert!(
+        allowed_result.is_ok(),
+        "Adding workout with only allowed duration should succeed"
+    );
+    // Optionally verify the workout was added and has the correct duration and bodyweight
+    let workouts = service.list_workouts(&WorkoutFilters {
+        exercise_name: Some("Plank"),
+        limit: Some(1),
+        ..Default::default()
+    })?;
+    assert_eq!(workouts.len(), 1);
+    assert_eq!(workouts[0].duration_minutes, Some(60));
+    assert_eq!(workouts[0].bodyweight, Some(bodyweight_val));
+    assert!(workouts[0].weight.is_none()); // Check restricted fields are None
+    assert!(workouts[0].reps.is_none());
+    assert!(workouts[0].distance.is_none());
+
+    // --- Attempt 2: Add workout with disallowed data (distance) ---
+    let disallowed_dist_result = service.add_workout(AddWorkoutParams {
+        exercise_identifier: "Plank",
+        date: Utc::now(),
+        duration: Some(60),                      // Allowed
+        distance: Some(1.0),                     // NOT allowed by definition
+        bodyweight_to_use: Some(bodyweight_val), // Required for BW type
+        ..Default::default()
+    });
+    assert!(
+        disallowed_dist_result.is_err(),
+        "Adding workout with disallowed distance should fail"
+    );
+    let err_msg = disallowed_dist_result.unwrap_err().to_string();
+    assert!(err_msg.contains("Exercise 'Plank' is not configured to log the following: distance"));
+
+    // --- Attempt 3: Add workout with multiple disallowed data fields ---
+    let disallowed_multiple_result = service.add_workout(AddWorkoutParams {
+        exercise_identifier: "Plank",
+        date: Utc::now(),
+        duration: Some(60),                      // Allowed
+        weight: Some(5.0),                       // NOT allowed
+        reps: Some(10),                          // NOT allowed
+        distance: Some(0.5),                     // NOT allowed
+        bodyweight_to_use: Some(bodyweight_val), // Required for BW type
+        ..Default::default()
+    });
+    assert!(
+        disallowed_multiple_result.is_err(),
+        "Adding workout with multiple disallowed fields should fail"
+    );
+    let err_msg_multiple = disallowed_multiple_result.unwrap_err().to_string();
+    // Check that the error message lists all violations
+    assert!(
+        err_msg_multiple.contains(
+            "Exercise 'Plank' is not configured to log the following: weight, reps, distance"
+        ) || err_msg_multiple.contains(
+            "Exercise 'Plank' is not configured to log the following: reps, weight, distance"
+        ) || err_msg_multiple.contains(
+            "Exercise 'Plank' is not configured to log the following: distance, weight, reps"
+        ) // Check for common order variations
+          // Add other order variations if needed, or sort the expected string for assertion
+    );
+
+    // --- Attempt 4: Add workout with *only* disallowed data ---
+    let only_disallowed_result = service.add_workout(AddWorkoutParams {
+        exercise_identifier: "Plank",
+        date: Utc::now(),
+        weight: Some(1.0),                       // NOT allowed
+        reps: Some(1),                           // NOT allowed
+        distance: Some(0.1),                     // NOT allowed
+        bodyweight_to_use: Some(bodyweight_val), // Required for BW type
+        ..Default::default()                     // duration: None, which is the *only* allowed field
+    });
+    assert!(
+        only_disallowed_result.is_err(),
+        "Adding workout with only disallowed data should fail"
+    );
+    let err_msg_only_disallowed = only_disallowed_result.unwrap_err().to_string();
+    assert!(
+        err_msg_only_disallowed.contains(
+            "Exercise 'Plank' is not configured to log the following: weight, reps, distance"
+        ) || err_msg_only_disallowed.contains(
+            "Exercise 'Plank' is not configured to log the following: reps, weight, distance"
+        ) || err_msg_only_disallowed.contains(
+            "Exercise 'Plank' is not configured to log the following: distance, weight, reps"
+        ) // Check for common order variations
+    );
+
+    // --- Create a different exercise that logs weight/reps but not duration/distance ---
+    service.create_exercise(
+        "Bicep Curl",
+        ExerciseType::Resistance,
+        Some((Some(true), Some(true), Some(false), Some(false))), // (w, r, dur, dist)
+        Some("biceps"),
+    )?;
+
+    // Attempt to add duration data for Bicep Curl
+    let disallowed_curl_duration_result = service.add_workout(AddWorkoutParams {
+        exercise_identifier: "Bicep Curl",
+        date: Utc::now(),
+        sets: Some(3),
+        reps: Some(10),
+        weight: Some(20.0),
+        duration: Some(5), // NOT allowed for Bicep Curl
+        ..Default::default()
+    });
+    assert!(
+        disallowed_curl_duration_result.is_err(),
+        "Adding duration to Bicep Curl should fail"
+    );
+    let err_msg_curl = disallowed_curl_duration_result.unwrap_err().to_string();
+    assert!(err_msg_curl
+        .contains("Exercise 'Bicep Curl' is not configured to log the following: duration"));
 
     Ok(())
 }

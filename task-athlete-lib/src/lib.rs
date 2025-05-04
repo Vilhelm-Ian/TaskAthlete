@@ -67,6 +67,7 @@ pub struct EditWorkoutParams {
     pub new_sets: Option<i64>,
     pub new_reps: Option<i64>,
     pub new_weight: Option<f64>,
+    pub new_bodyweight: Option<f64>,
     pub new_duration: Option<i64>,
     pub new_distance_arg: Option<f64>,
     pub new_notes: Option<String>,
@@ -383,22 +384,37 @@ impl AppService {
         &self,
         name: &str,
         type_: ExerciseType,
+        log_flags: Option<(Option<bool>, Option<bool>, Option<bool>, Option<bool>)>, // (w, r, dur, dist)
         muscles: Option<&str>,
     ) -> Result<i64> {
         let trimmed_name = name.trim();
         if trimmed_name.is_empty() {
             bail!("Exercise name cannot be empty.");
         }
-        db::create_exercise(&self.conn, trimmed_name, &type_, muscles).map_err(
-            |db_err| match db_err {
-                DbError::ExerciseNameNotUnique(_) => anyhow::anyhow!(db_err),
-                _ => anyhow::Error::new(db_err)
-                    .context(format!("Failed to create exercise '{trimmed_name}'")),
-            },
+        let (log_w, log_r, log_dur, log_dist) = match log_flags {
+            Some((w, r, dur, dist)) => (w, r, dur, dist),
+            None => (None, None, None, None), // Use DB defaults based on type
+        };
+        db::create_exercise(
+            &self.conn,
+            trimmed_name,
+            &type_,
+            muscles,
+            log_w,
+            log_r,
+            log_dur,
+            log_dist,
         )
+        .map_err(|db_err| match db_err {
+            DbError::ExerciseNameNotUnique(_) => anyhow::anyhow!(db_err),
+            _ => anyhow::Error::new(db_err)
+                .context(format!("Failed to create exercise '{trimmed_name}'")),
+        })
     }
 
     /// Edits an existing exercise definition.
+    /// # Arguments
+    /// * `log_flags`: Optional tuple of new flags (w, r, dur, dist). Use `None` for flags you don't want to change.
     /// # Errors
     /// Returns `anyhow::Error` if identifier invalid, new name invalid, or DB update fails.
     pub fn edit_exercise(
@@ -406,6 +422,7 @@ impl AppService {
         identifier: &str,
         new_name: Option<&str>,
         new_type: Option<ExerciseType>,
+        log_flags: Option<(Option<bool>, Option<bool>, Option<bool>, Option<bool>)>, // (w, r, dur, dist)
         new_muscles: Option<Option<&str>>,
     ) -> Result<u64> {
         let current_def = self
@@ -417,6 +434,10 @@ impl AppService {
         if new_name.is_some() && trimmed_new_name.is_none() {
             bail!("New exercise name cannot be empty if provided.");
         }
+        let (log_w, log_r, log_dur, log_dist) = match log_flags {
+            Some((w, r, dur, dist)) => (w, r, dur, dist),
+            None => (None, None, None, None), // No changes to flags
+        };
 
         db::update_exercise(
             &mut self.conn,
@@ -424,6 +445,10 @@ impl AppService {
             trimmed_new_name,
             new_type.as_ref(),
             new_muscles,
+            log_w,
+            log_r,
+            log_dur,
+            log_dist,
         )
         .map_err(|db_err| match db_err {
             DbError::ExerciseNameNotUnique(name) => {
@@ -557,7 +582,8 @@ impl AppService {
     /// # Returns
     /// A `Result` containing `(workout_id, Option<PBInfo>)`.
     /// # Errors
-    /// Returns `anyhow::Error` if exercise invalid, bodyweight needed but missing, or DB add fails.
+    /// Returns `anyhow::Error` if exercise invalid, bodyweight needed but missing,
+    /// logging restricted metrics, or DB add fails.
     pub fn add_workout(&mut self, params: AddWorkoutParams) -> Result<(i64, Option<PBInfo>)> {
         let exercise_def = self.resolve_or_create_exercise(
             params.exercise_identifier,
@@ -566,9 +592,52 @@ impl AppService {
         )?;
         let canonical_exercise_name = &exercise_def.name;
 
-        let final_weight =
-            calculate_final_weight(&exercise_def, params.weight, params.bodyweight_to_use)?;
-        let final_distance_km = self.convert_distance_input_to_km(params.distance);
+        // --- Check for violations of log flags ---
+        let mut violations = vec![];
+
+        if !exercise_def.log_weight && params.weight.is_some() {
+            violations.push("weight");
+        }
+        if !exercise_def.log_reps && params.reps.is_some() {
+            violations.push("reps");
+        }
+        // Note: Duration/Distance checks should use the input params, not the converted ones
+        if !exercise_def.log_duration && params.duration.is_some() {
+            violations.push("duration");
+        }
+        if !exercise_def.log_distance && params.distance.is_some() {
+            violations.push("distance");
+        }
+
+        if !violations.is_empty() {
+            let violation_msg = violations.join(", ");
+            // Use `bail!` for early return with a specific error message
+            bail!(
+                "Exercise '{}' is not configured to log the following: {}. Use 'edit exercise {}' to change its logging settings.",
+                canonical_exercise_name,
+                violation_msg,
+                canonical_exercise_name // Suggest how to fix it
+            );
+        }
+        // ----------------------------------------
+
+        // --- Bodyweight check for BodyWeight exercises (remains, as this is a separate requirement) ---
+        // If it's a BodyWeight exercise, bodyweight_to_use MUST be provided (by the caller, e.g., main).
+        // This check happens AFTER log flag violations, as you might provide e.g., weight (which is disallowed for BW)
+        // AND forget bodyweight. We report the log flag violation first.
+        if exercise_def.type_ == ExerciseType::BodyWeight && params.bodyweight_to_use.is_none() {
+            bail!(
+                 "Bodyweight log required for BodyWeight exercise '{}'. Use 'log-bw <weight>' or ensure a recent log exists and is passed to the command.",
+                 canonical_exercise_name
+             );
+        }
+        // -------------------------------------------------------------------------------------------
+
+        // Prepare data for DB insertion
+        // weight and bodyweight_to_use are stored separately in the DB
+        let additional_weight_for_db = params.weight;
+        let bodyweight_for_db = params.bodyweight_to_use; // Already checked if needed for BW type
+
         let timestamp = params.date;
         let previous_bests = self.get_previous_bests(canonical_exercise_name)?;
 
@@ -576,20 +645,31 @@ impl AppService {
             exercise_name: canonical_exercise_name,
             timestamp,
             sets: params.sets,
+            weight: additional_weight_for_db, // Store additional weight
+            bodyweight_to_use: bodyweight_for_db, // Store bodyweight at time of workout
             reps: params.reps,
-            weight: final_weight,
             duration: params.duration,
-            distance: final_distance_km,
+            distance: self.convert_distance_input_to_km(params.distance), // Always store distance as KM
             notes: params.notes.as_deref(),
         };
+
         let inserted_id = self.insert_workout_record(&workout_data)?;
 
+        // Calculate effective weight for the PB check.
+        // Use the values that were provided (and stored if allowed/needed).
+        let effective_weight_for_pb_check = calculate_effective_weight(
+            &exercise_def,
+            additional_weight_for_db, // Use the additional weight provided
+            bodyweight_for_db,        // Use the bodyweight provided
+        );
+
+        // Pass distance to PB check AFTER converting to KM (as stored in DB and fetched by get_max_distance_for_exercise)
         let pb_info = self.check_for_new_pbs(
             &previous_bests,
-            final_weight,
+            effective_weight_for_pb_check,
             params.reps,
             params.duration,
-            final_distance_km,
+            self.convert_distance_input_to_km(params.distance), // Use converted distance for PB check
         );
 
         Ok((inserted_id, pb_info))
@@ -610,7 +690,8 @@ impl AppService {
             } else {
                 Some(muscles.as_str())
             };
-            match self.create_exercise(identifier, ex_type, muscles_opt) {
+            // Pass None for log_flags to use defaults
+            match self.create_exercise(identifier, ex_type, None, muscles_opt) {
                 Ok(id) => {
                     println!("Implicitly defined '{identifier}' (ID: {id})");
                     self.resolve_exercise_identifier(identifier)?
@@ -636,7 +717,7 @@ impl AppService {
 
     fn get_previous_bests(&self, name: &str) -> Result<PreviousBests> {
         Ok(PreviousBests {
-            weight: db::get_max_weight_for_exercise(&self.conn, name)?,
+            weight: db::get_max_effective_weight_for_exercise(&self.conn, name)?,
             reps: db::get_max_reps_for_exercise(&self.conn, name)?,
             duration: db::get_max_duration_for_exercise(&self.conn, name)?,
             distance_km: db::get_max_distance_for_exercise(&self.conn, name)?,
@@ -730,6 +811,7 @@ impl AppService {
             reps: params.new_reps,
             weight: params.new_weight,
             duration_minutes: params.new_duration,
+            bodyweight: params.new_bodyweight,
             distance: new_distance_km,
             notes: params.new_notes,
             timestamp: Utc::now(),
@@ -864,7 +946,7 @@ impl AppService {
         let (current_streak, longest_streak) = calculate_streaks(&timestamps, streak_interval);
 
         let personal_bests = PersonalBests {
-            max_weight: db::get_max_weight_for_exercise(&self.conn, &canonical_name)?,
+            max_weight: db::get_max_effective_weight_for_exercise(&self.conn, &canonical_name)?,
             max_reps: db::get_max_reps_for_exercise(&self.conn, &canonical_name)?,
             max_duration_minutes: db::get_max_duration_for_exercise(&self.conn, &canonical_name)?,
             max_distance_km: db::get_max_distance_for_exercise(&self.conn, &canonical_name)?,
@@ -1063,27 +1145,6 @@ fn create_timestamp_from_date(date: NaiveDate) -> Result<DateTime<Utc>> {
     Ok(Utc.from_utc_datetime(&naive_dt))
 }
 
-/// Calculates final weight based on exercise type.
-/// # Errors
-/// Returns `anyhow::Error` if BW needed but missing.
-fn calculate_final_weight(
-    ex_def: &ExerciseDefinition,
-    weight_arg: Option<f64>,
-    bw_use: Option<f64>,
-) -> Result<Option<f64>> {
-    if ex_def.type_ == ExerciseType::BodyWeight {
-        match bw_use {
-            Some(bw) => Ok(Some(bw + weight_arg.unwrap_or(0.0))),
-            None => bail!(
-                "Bodyweight log required for '{}', but none found/provided.",
-                ex_def.name
-            ),
-        }
-    } else {
-        Ok(weight_arg)
-    }
-}
-
 /// Calculates current and longest streaks.
 /// # Panics
 /// Can panic if `timestamps` contains non-sensical dates leading to negative durations
@@ -1122,4 +1183,18 @@ fn calculate_streaks(timestamps: &[DateTime<Utc>], interval: Duration) -> (u32, 
         current = 0;
     }
     (current, longest)
+}
+
+/// Calculates the effective weight (additional + bodyweight) for calculations.
+fn calculate_effective_weight(
+    ex_def: &ExerciseDefinition,
+    additional_weight: Option<f64>,
+    stored_bodyweight: Option<f64>,
+) -> Option<f64> {
+    match ex_def.type_ {
+        ExerciseType::BodyWeight => {
+            Some(additional_weight.unwrap_or(0.0) + stored_bodyweight.unwrap_or(0.0))
+        }
+        _ => additional_weight, // For Resistance/Cardio, effective weight is just the additional weight
+    }
 }

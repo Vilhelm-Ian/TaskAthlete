@@ -3,7 +3,6 @@
 use crate::app::state::{ActiveModal, AddExerciseField, App};
 use crate::app::AppInputError;
 use anyhow::Result;
-use chrono::Duration;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use task_athlete_lib::{DbError, ExerciseType};
 

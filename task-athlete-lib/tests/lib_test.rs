@@ -12,8 +12,6 @@ use task_athlete_lib::{
     EditWorkoutParams,
     ExerciseType,
     GraphType,
-    PBInfo, // Import PBInfo
-    PbMetricInfo,
     Units,
     VolumeFilters,
     WorkoutFilters,
@@ -1162,7 +1160,7 @@ fn test_exercise_not_found() -> Result<()> {
 
 #[test]
 fn test_workout_not_found() -> Result<()> {
-    let mut service = create_test_service()?; // Renamed from create_mutable_conn_to_test_db
+    let service = create_test_service()?; // Renamed from create_mutable_conn_to_test_db
 
     // Try to edit non-existent workout
     let result = service.edit_workout(EditWorkoutParams {

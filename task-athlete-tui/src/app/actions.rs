@@ -1,7 +1,7 @@
 use super::state::{ActiveModal, AddExerciseField, AddWorkoutField, App};
 use anyhow::Result;
 use ratatui::widgets::ListState;
-use task_athlete_lib::{ExerciseDefinition, ExerciseType, Units, Workout, WorkoutFilters};
+use task_athlete_lib::{ExerciseDefinition, ExerciseType, Units, Workout};
 
 // Make handle_key_event a method on App
 impl App {

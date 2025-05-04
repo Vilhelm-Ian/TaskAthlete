@@ -7,16 +7,14 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style, Stylize},
     symbols,
-    text::{Line, Span},
+    text::Span,
     widgets::{
         Axis,
         Block,
         Borders,
-        Cell,
         Chart,
         Dataset,
-        GraphType as ChartGraphType, // Avoid name clash
-        LegendPosition,
+        GraphType as ChartGraphType,
         List,
         ListItem,
         Paragraph,

@@ -81,7 +81,9 @@ struct ColumnVisibility {
 fn determine_column_visibility(sets: &[Workout]) -> ColumnVisibility {
     ColumnVisibility {
         has_reps: sets.iter().any(|w| w.reps.is_some()),
-        has_weight: sets.iter().any(|w| w.weight.is_some()),
+        has_weight: sets
+            .iter()
+            .any(|w| w.calculate_effective_weight().is_some()),
         has_duration: sets.iter().any(|w| w.duration_minutes.is_some()),
         has_distance: sets.iter().any(|w| w.distance.is_some()),
         // Consider empty strings as "no data" for notes if desired:
@@ -192,8 +194,8 @@ fn create_table_rows<'a>(
             }
             if visibility.has_weight {
                 let weight_display = match units {
-                    Units::Metric => w.weight,
-                    Units::Imperial => w.weight.map(|kg| kg * 2.20462),
+                    Units::Metric => w.calculate_effective_weight(),
+                    Units::Imperial => w.calculate_effective_weight().map(|kg| kg * 2.20462),
                 };
                 let weight_str = weight_display.map_or("-".to_string(), |v| format!("{:.1}", v));
                 row_cells.push(Cell::from(weight_str));

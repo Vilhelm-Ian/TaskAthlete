@@ -4,7 +4,6 @@ use crate::app::state::{ActiveModal, App};
 use crate::app::AppInputError;
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent};
-use task_athlete_lib::DbError;
 
 // --- Submission Logic ---
 

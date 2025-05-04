@@ -1,15 +1,10 @@
 use super::state::App;
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use chrono::{Datelike, Duration, NaiveDate, Utc};
-use ratatui::text::{Line, Span}; // Import Line, Span
-use ratatui::{
-    layout::Constraint,
-    style::{Modifier, Style, Stylize},
-    symbols,
-};
+ // Import Line, Span
 use std::collections::HashMap;
 use task_athlete_lib::Units;
-use task_athlete_lib::{AppService, DbError, GraphType as LibGraphType, Workout, WorkoutFilters};
+use task_athlete_lib::{DbError, GraphType as LibGraphType, Workout, WorkoutFilters};
 
 // Make refresh logic methods on App
 impl App {
@@ -466,7 +461,7 @@ pub fn format_set_line(workout: &Workout, units: Units) -> String {
     if let Some(reps) = workout.reps {
         parts.push(format!("{} reps", reps));
     }
-    if let Some(weight_kg) = workout.weight {
+    if let Some(weight_kg) = workout.calculate_effective_weight() {
         let (display_weight, unit_str) = match units {
             Units::Metric => (weight_kg, "kg"),
             Units::Imperial => (weight_kg * 2.20462, "lbs"),

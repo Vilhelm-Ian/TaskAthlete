@@ -6,6 +6,7 @@ mod confirm_delete_bodyweight;
 mod confirm_delete_workout_set;
 mod create_exercise;
 mod edit_workout;
+mod input_helpers;
 mod log_bodyweight;
 mod pb_modal;
 mod set_target_weight;

@@ -1,7 +1,7 @@
 use crate::ui::layout::centered_rect;
 use ratatui::{
     layout::Margin,
-    style::{Modifier, Style, Stylize},
+    style::{Style, Stylize},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
     Frame,

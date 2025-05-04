@@ -9,12 +9,12 @@ use crate::{
 };
 use ratatui::{
     layout::{Constraint, Direction, Layout, Margin},
-    style::{Color, Modifier, Style, Stylize},
+    style::{Style, Stylize},
     text::{Line, Span, Text}, // Use Text
     widgets::{Block, Borders, Clear, Paragraph},
     Frame,
 };
-use task_athlete_lib::{PBInfo, Units}; // Import Units
+use task_athlete_lib::Units; // Import Units
 
 pub(super) fn render(f: &mut Frame, app: &App) {
     if let ActiveModal::PersonalBest {

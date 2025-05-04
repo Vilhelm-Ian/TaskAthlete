@@ -1,7 +1,7 @@
 use crate::{
     app::{ActiveTab, App}, // Use App from crate::app
     ui::{
-        bodyweight_tab, graphs_tab, history_tab, log_tab, modals, placeholders, status_bar, tabs,
+        bodyweight_tab, graphs_tab, history_tab, log_tab, modals, status_bar, tabs,
     },
 };
 use ratatui::{

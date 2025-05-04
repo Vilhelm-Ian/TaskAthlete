@@ -54,7 +54,7 @@ pub(super) fn render_confirmation_modal(f: &mut Frame, app: &App) {
 
 pub(super) fn render_confirmation_bodyweight_modal(f: &mut Frame, app: &App) {
     if let ActiveModal::ConfirmDeleteBodyWeight {
-        body_weight_id,
+        
         set_index,
         .. // Ignore workout_id
     } = &app.active_modal

@@ -6,7 +6,6 @@ mod handlers; // NEW: Include handlers module
 mod output; // NEW: Include output module
 
 use anyhow::{Context, Result};
-use clap_complete::aot::utils::flags;
 use std::io::stdout;
 use task_athlete_lib::AppService;
 

@@ -13,7 +13,6 @@ pub mod utils;
 // Re-export the main App struct and other necessary types for convenience
 pub use state::{
     ActiveTab,
-    AddExerciseField,
     AddWorkoutField,
     App, // Add AddExerciseField
 }; // Add other enums if needed

@@ -1,6 +1,4 @@
-//src/app/state.rs
-// task-athlete-tui/src/app/state.rs
-// Use error from parent mod
+// src/app/state.rs
 use chrono::{NaiveDate, Utc};
 use ratatui::{
     text::Line,
@@ -10,7 +8,6 @@ use std::time::Instant;
 use task_athlete_lib::{
     AppService, ExerciseDefinition, ExerciseType, GraphType, PBInfo, Workout, WorkoutFilters,
 }; // Keep lib imports
-use thiserror::Error;
 
 // Represents the active UI tab
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -82,6 +79,7 @@ pub enum AddWorkoutField {
     Cancel,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)] // Added Copy trait
 pub enum GraphsFocus {
     ExerciseList,
     GraphTypeList,
@@ -96,6 +94,43 @@ pub enum HistoryFocus {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PbModalField {
     OkButton,
+}
+
+// NEW: Helper struct for workout field visibility flags
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WorkoutLogFlags {
+    pub log_sets: bool,
+    pub log_reps: bool,
+    pub log_weight: bool,
+    pub log_duration: bool,
+    pub log_distance: bool,
+    pub log_notes: bool,
+}
+
+impl WorkoutLogFlags {
+    /// Creates flags based on an optional ExerciseDefinition.
+    /// Defaults show all fields if no definition is provided (useful for initial Add modal state).
+    pub fn from_def(def: Option<&ExerciseDefinition>) -> Self {
+        def.map_or(
+            Self {
+                // Default: Show all initially
+                log_sets: true,
+                log_reps: true,
+                log_weight: true,
+                log_duration: true,
+                log_distance: true,
+                log_notes: true,
+            },
+            |d| Self {
+                log_sets: true, // Assume sets are always logged
+                log_reps: d.log_reps,
+                log_weight: d.log_weight,
+                log_duration: d.log_duration,
+                log_distance: d.log_distance,
+                log_notes: true, // Assume notes are always logged
+            },
+        )
+    }
 }
 
 // Represents the state of active modals
@@ -156,9 +191,6 @@ pub enum ActiveModal {
         focused_field: AddWorkoutField, // Reuse AddWorkoutField for focus, minus Exercise/Suggestions
         error_message: Option<String>,
         // Store the definition for context (e.g., bodyweight type)
-        // This is technically redundant if exercise_name is fixed,
-        // but useful for consistency and potential future enhancements.
-        // Store the resolved definition temporarily after user leaves exercise field
         resolved_exercise: Option<ExerciseDefinition>,
     },
     ConfirmDeleteWorkout {
@@ -309,7 +341,7 @@ impl App {
     pub fn get_last_or_specific_workout(
         &self,
         canonical_name: &str,
-        id: Option<u64>,
+        _id: Option<u64>, // _id parameter is currently unused, but kept for potential future use
     ) -> Option<Workout> {
         let filters = WorkoutFilters {
             exercise_name: Some(canonical_name),

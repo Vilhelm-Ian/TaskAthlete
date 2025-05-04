@@ -18,7 +18,6 @@ use super::{
 };
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent};
-use task_athlete_lib::DbError;
 
 // Main key event handler method on App
 impl App {

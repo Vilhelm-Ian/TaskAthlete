@@ -1,107 +1,144 @@
 // src/app/modals/add_workout.rs
-
-use crate::app::state::{ActiveModal, AddWorkoutField, App};
+// ... other imports ...
+use super::input_helpers::{get_next_focusable_field, NavigationDirection};
+use crate::app::state::{ActiveModal, AddWorkoutField, App, WorkoutLogFlags};
 use crate::app::utils::parse_option_to_input;
-use crate::app::utils::{modify_numeric_input, parse_optional_float, parse_optional_int}; // Import from sibling utils module
+use crate::app::utils::{modify_numeric_input, parse_optional_float, parse_optional_int};
 use crate::app::AppInputError;
 use anyhow::Result;
-use chrono::{NaiveDate, NaiveDateTime, TimeZone, Utc};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use chrono::{TimeZone, Utc};
+use crossterm::event::{KeyCode, KeyEvent};
 use task_athlete_lib::{AddWorkoutParams, DbError, ExerciseDefinition, ExerciseType};
 
-// --- Submission Logic ---
-
+// --- Submission Logic --- (no changes needed here)
 fn submit_add_workout(app: &mut App, modal_state: &ActiveModal) -> Result<bool, AppInputError> {
+    // ... same as before ...
     if let ActiveModal::AddWorkout {
-         exercise_input: _, // Use resolved_exercise name
-         sets_input,
-         reps_input,
-         weight_input,
-         duration_input,
-         distance_input,
-         notes_input,
-         resolved_exercise, // Use the stored resolved exercise
-         .. // ignore focused_field, error_message, suggestions etc.
-     } = modal_state {
+        sets_input,
+        reps_input,
+        weight_input,
+        duration_input,
+        distance_input,
+        notes_input,
+        resolved_exercise,
+        ..
+    } = modal_state
+    {
         let mut workout_parameters = AddWorkoutParams::default();
         workout_parameters.date = if Utc::now().date_naive() == app.log_viewed_date {
             Utc::now()
         } else {
-            let naive = app.log_viewed_date.and_hms_opt(12, 0, 0)
+            let naive = app
+                .log_viewed_date
+                .and_hms_opt(12, 0, 0)
                 .ok_or_else(|| AppInputError::InvalidDate("Invalid date".to_string()))?;
             Utc.from_utc_datetime(&naive)
         };
 
-        // 1. Validate Exercise Selection
         let exercise_def = resolved_exercise.as_ref().ok_or_else(|| {
-             // This error should ideally be prevented by the input handler (not allowing Tab/Enter without resolution)
-             AppInputError::DbError("Exercise not resolved. Select a valid exercise.".to_string())
+            AppInputError::DbError("Exercise not resolved. Select a valid exercise.".to_string())
         })?;
         workout_parameters.exercise_identifier = exercise_def.name.as_str();
 
+        let flags = WorkoutLogFlags::from_def(Some(exercise_def));
+        workout_parameters.sets = if flags.log_sets {
+            parse_optional_int::<i64>(sets_input)?
+        } else {
+            None
+        };
+        workout_parameters.reps = if flags.log_reps {
+            parse_optional_int::<i64>(reps_input)?
+        } else {
+            None
+        };
+        workout_parameters.weight = if flags.log_weight {
+            parse_optional_float(weight_input)?
+        } else {
+            None
+        };
+        workout_parameters.duration = if flags.log_duration {
+            parse_optional_int::<i64>(duration_input)?
+        } else {
+            None
+        };
+        workout_parameters.distance = if flags.log_distance {
+            parse_optional_float(distance_input)?
+        } else {
+            None
+        };
 
-        // 2. Parse numeric inputs
-        workout_parameters.sets = parse_optional_int::<i64>(sets_input)?;
+        workout_parameters.notes = if notes_input.trim().is_empty() {
+            None
+        } else {
+            Some(notes_input.trim().to_string())
+        };
 
-        workout_parameters.reps = parse_optional_int::<i64>(reps_input)?;
-        workout_parameters.weight = parse_optional_float(weight_input)?; // This is the value from the input field
-        workout_parameters.duration = parse_optional_int::<i64>(duration_input)?;
-        workout_parameters.distance = parse_optional_float(distance_input)?; // Value from input field
-
-        // 3. Notes
-        workout_parameters.notes = if notes_input.trim().is_empty() { None } else { Some(notes_input.trim().to_string()) };
-
-        // 4. Bodyweight & Units (Service layer handles this based on type and config)
         workout_parameters.bodyweight_to_use = if exercise_def.type_ == ExerciseType::BodyWeight {
-            app.service.config.bodyweight // Pass the configured bodyweight
+            app.service.config.bodyweight
         } else {
             None
         };
         let ex_identifier = workout_parameters.exercise_identifier;
-        // 5. Call AppService
-        match app.service.add_workout(
-            workout_parameters
-        ) {
+
+        match app.service.add_workout(workout_parameters) {
             Ok((_workout_id, pb_info)) => {
-                 let mut pb_modal_opened = false; // Initialize the flag
-                 if let Some(pb) = pb_info {
+                let mut pb_modal_opened = false;
+                if let Some(pb) = pb_info {
                     if pb.any_pb() {
                         app.open_pb_modal(ex_identifier.to_string(), pb);
-                        pb_modal_opened = true; // Set the flag if PB modal was opened
+                        pb_modal_opened = true;
                     }
-                 }
-                 Ok(pb_modal_opened) // Return the flag indicating if PB modal was shown
+                }
+                Ok(pb_modal_opened)
             }
             Err(e) => {
-                dbg!("hello");
-                 // Convert service error to modal error
-                 if let Some(db_err) = e.downcast_ref::<DbError>() {
-                     Err(AppInputError::DbError(db_err.to_string()))
-                 } else if let Some(cfg_err) = e.downcast_ref::<task_athlete_lib::ConfigError>() {
-                      Err(AppInputError::DbError(cfg_err.to_string())) // Use DbError variant for simplicity
-                 }
-                 else {
-                     Err(AppInputError::DbError(format!("Error adding workout: {}", e)))
-                 }
+                if let Some(db_err) = e.downcast_ref::<DbError>() {
+                    Err(AppInputError::DbError(db_err.to_string()))
+                } else if let Some(cfg_err) = e.downcast_ref::<task_athlete_lib::ConfigError>() {
+                    Err(AppInputError::DbError(cfg_err.to_string()))
+                } else {
+                    Err(AppInputError::DbError(format!(
+                        "Error adding workout: {}",
+                        e
+                    )))
+                }
             }
         }
-
-     } else {
-         // Should not happen if called correctly
-         Err(AppInputError::DbError("Internal error: Invalid modal state for add workout".to_string()))
-     }
+    } else {
+        Err(AppInputError::DbError(
+            "Internal error: Invalid modal state for add workout".to_string(),
+        ))
+    }
 }
 
 // --- Input Handling ---
 
-// Made public for re-export in mod.rs
 pub fn handle_add_workout_modal_input(app: &mut App, key: KeyEvent) -> Result<()> {
-    let mut submission_result: Result<bool, AppInputError> = Ok(false);
+    let mut submission_result: Result<bool, AppInputError> = Ok(false); // Store PB modal flag
     let mut should_submit = false;
     let mut needs_suggestion_update = false;
-    // Flag to indicate that workout fields should be repopulated
     let mut repopulate_fields_for_resolved_exercise: Option<ExerciseDefinition> = None;
+    let mut next_focus_target: Option<AddWorkoutField> = None; // <-- Store next focus target
 
+    // --- Get Flags and Current Focus Early ---
+    let (current_focused_field, flags, is_add_mode) = {
+        if let ActiveModal::AddWorkout {
+            focused_field,
+            resolved_exercise,
+            ..
+        } = &app.active_modal
+        {
+            (
+                *focused_field,
+                WorkoutLogFlags::from_def(resolved_exercise.as_ref()),
+                true,
+            )
+        } else {
+            (AddWorkoutField::Cancel, WorkoutLogFlags::default(), true)
+        }
+    };
+
+    // --- Main Input Handling Logic (Inside mutable borrow) ---
     if let ActiveModal::AddWorkout {
         ref mut exercise_input,
         ref mut sets_input,
@@ -115,113 +152,29 @@ pub fn handle_add_workout_modal_input(app: &mut App, key: KeyEvent) -> Result<()
         ref mut resolved_exercise,
         ref mut exercise_suggestions,
         ref mut suggestion_list_state,
-        .. // ignore all_exercise_identifiers
+        ..
     } = app.active_modal
     {
-        *error_message = None; // Clear error on most inputs
-        let mut focus_changed = false;
+        *error_message = None;
 
-        // --- Main Input Handling Logic ---
-        match *focused_field {
-            AddWorkoutField::Exercise => match key.code {
+        // Handle Suggestions state separately
+        if *focused_field == AddWorkoutField::Suggestions {
+            match key.code {
                 KeyCode::Char(c) => {
                     exercise_input.push(c);
-                    *resolved_exercise = None; // Invalidate resolution
-                    needs_suggestion_update = true; // Filter suggestions after borrow
+                    *resolved_exercise = None;
+                    needs_suggestion_update = true;
+                    next_focus_target = Some(AddWorkoutField::Exercise); // Go back to input field
                 }
                 KeyCode::Backspace => {
                     exercise_input.pop();
-                    *resolved_exercise = None; // Invalidate resolution
-                    needs_suggestion_update = true; // Filter suggestions after borrow
+                    *resolved_exercise = None;
+                    needs_suggestion_update = true;
+                    next_focus_target = Some(AddWorkoutField::Exercise); // Go back to input field
                 }
-                KeyCode::Down => {
+                KeyCode::Up => {
+                    /* ... suggestion list navigation ... */
                     if !exercise_suggestions.is_empty() {
-                        *focused_field = AddWorkoutField::Suggestions;
-                        suggestion_list_state.select(Some(0));
-                        focus_changed = true;
-                    } else {
-                        // No suggestions, behave like Tab (go to Sets)
-                        // Attempt to resolve before moving
-                        match app.service.resolve_exercise_identifier(exercise_input) {
-                            Ok(Some(def)) => {
-                                *exercise_input = def.name.clone();
-                                if resolved_exercise.as_ref() != Some(&def) { // Check if it changed
-                                    repopulate_fields_for_resolved_exercise = Some(def.clone());
-                                }
-                                *resolved_exercise = Some(def);
-                                *focused_field = AddWorkoutField::Sets;
-                                focus_changed = true;
-                                *exercise_suggestions = Vec::new(); // Clear suggestions
-                                suggestion_list_state.select(None);
-                            }
-                            Ok(None) => {
-                                *error_message = Some(format!("Exercise '{}' not found.", exercise_input));
-                                // Optionally clear fields if resolution fails? Maybe not.
-                            }
-                            Err(e) => *error_message = Some(format!("Error: {}", e)),
-                        }
-                    }
-                }
-                 KeyCode::Tab => {
-                    // Attempt to resolve current input before moving
-                    if resolved_exercise.is_none() && !exercise_input.is_empty() {
-                        match app.service.resolve_exercise_identifier(exercise_input) {
-                            Ok(Some(def)) => {
-                                *exercise_input = def.name.clone(); // Update input to canonical name
-                                if resolved_exercise.as_ref() != Some(&def) { // Check if it *really* changed
-                                    repopulate_fields_for_resolved_exercise = Some(def.clone());
-                                }
-                                *resolved_exercise = Some(def);
-                                *focused_field = AddWorkoutField::Sets;
-                                focus_changed = true;
-                                *exercise_suggestions = Vec::new(); // Clear suggestions after resolving/moving away
-                                suggestion_list_state.select(None);
-                            }
-                            Ok(None) => {
-                                *error_message = Some(format!("Exercise '{}' not found. Cannot move.", exercise_input));
-                                // Optionally clear fields if resolution fails? Maybe not.
-                            } // Stay if not resolved
-                            Err(e) => {
-                                *error_message = Some(format!("Error resolving: {}. Cannot move.", e));
-                            } // Stay if error
-                        }
-                    } else { // Move if already resolved or empty
-                        *focused_field = AddWorkoutField::Sets;
-                        focus_changed = true;
-                        *exercise_suggestions = Vec::new(); // Clear suggestions
-                        suggestion_list_state.select(None);
-                    }
-                }
-                KeyCode::Up => {
-                    *focused_field = AddWorkoutField::Cancel;
-                    focus_changed = true;
-                    *exercise_suggestions = Vec::new();
-                    suggestion_list_state.select(None);
-                }
-                KeyCode::Esc => {
-                    app.active_modal = ActiveModal::None;
-                    return Ok(());
-                }
-                _ => {}
-            },
-
-            AddWorkoutField::Suggestions => match key.code {
-                KeyCode::Char(c) => {
-                    exercise_input.push(c);
-                    *resolved_exercise = None;
-                    needs_suggestion_update = true;
-                    *focused_field = AddWorkoutField::Exercise;
-                    focus_changed = true;
-                }
-                KeyCode::Backspace => {
-                    exercise_input.pop();
-                    *resolved_exercise = None;
-                    needs_suggestion_update = true;
-                    *focused_field = AddWorkoutField::Exercise;
-                    focus_changed = true;
-                }
-                KeyCode::Up => {
-                     if !exercise_suggestions.is_empty() {
                         let current_selection = suggestion_list_state.selected().unwrap_or(0);
                         let new_selection = if current_selection == 0 {
                             exercise_suggestions.len() - 1
@@ -232,6 +185,7 @@ pub fn handle_add_workout_modal_input(app: &mut App, key: KeyEvent) -> Result<()
                     }
                 }
                 KeyCode::Down => {
+                    /* ... suggestion list navigation ... */
                     if !exercise_suggestions.is_empty() {
                         let current_selection = suggestion_list_state.selected().unwrap_or(0);
                         let new_selection = if current_selection >= exercise_suggestions.len() - 1 {
@@ -244,227 +198,486 @@ pub fn handle_add_workout_modal_input(app: &mut App, key: KeyEvent) -> Result<()
                 }
                 KeyCode::Enter => {
                     if let Some(selected_index) = suggestion_list_state.selected() {
-                        if let Some(selected_suggestion) = exercise_suggestions.get(selected_index) {
-                            match app.service.resolve_exercise_identifier(selected_suggestion) {
+                        if let Some(selected_suggestion) = exercise_suggestions.get(selected_index)
+                        {
+                            let suggestion_clone = selected_suggestion.clone();
+                            match app.service.resolve_exercise_identifier(&suggestion_clone) {
                                 Ok(Some(def)) => {
                                     *exercise_input = def.name.clone();
-                                    if resolved_exercise.as_ref() != Some(&def) { // Check if it changed
+                                    if resolved_exercise.as_ref() != Some(&def) {
                                         repopulate_fields_for_resolved_exercise = Some(def.clone());
                                     }
                                     *resolved_exercise = Some(def);
-                                    *focused_field = AddWorkoutField::Sets;
-                                    focus_changed = true;
-                                    *exercise_suggestions = Vec::new(); // Clear suggestions after selection
+                                    next_focus_target = Some(get_next_focusable_field(
+                                        current_focused_field,
+                                        &flags,
+                                        NavigationDirection::Forward,
+                                        is_add_mode,
+                                    ));
+                                    exercise_suggestions.clear();
                                     suggestion_list_state.select(None);
                                 }
                                 Ok(None) => {
-                                    *error_message = Some(format!("Could not resolve selected '{}'.", selected_suggestion));
-                                    *focused_field = AddWorkoutField::Exercise;
-                                    focus_changed = true;
-                                    // Do not clear suggestions if resolution failed
+                                    *error_message = Some(format!(
+                                        "Could not resolve selected '{}'.",
+                                        suggestion_clone
+                                    ));
+                                    next_focus_target = Some(AddWorkoutField::Exercise);
                                 }
                                 Err(e) => {
-                                    *error_message = Some(format!("Error resolving selected: {}", e));
-                                    *focused_field = AddWorkoutField::Exercise;
-                                    focus_changed = true;
-                                    // Do not clear suggestions if resolution failed
+                                    *error_message =
+                                        Some(format!("Error resolving selected: {}", e));
+                                    next_focus_target = Some(AddWorkoutField::Exercise);
                                 }
                             }
                         }
                     } else {
-                         // If somehow Enter hit with no selection, try resolving current input
-                        match app.service.resolve_exercise_identifier(exercise_input) {
+                        // Try resolving current input if Enter hit with no selection
+                        let input_clone = exercise_input.clone();
+                        match app.service.resolve_exercise_identifier(&input_clone) {
                             Ok(Some(def)) => {
                                 *exercise_input = def.name.clone();
                                 if resolved_exercise.as_ref() != Some(&def) {
-                                     repopulate_fields_for_resolved_exercise = Some(def.clone());
+                                    repopulate_fields_for_resolved_exercise = Some(def.clone());
                                 }
                                 *resolved_exercise = Some(def);
-                                *focused_field = AddWorkoutField::Sets; // Move to next field
-                                focus_changed = true;
-                                *exercise_suggestions = Vec::new();
+                                next_focus_target = Some(get_next_focusable_field(
+                                    current_focused_field,
+                                    &flags,
+                                    NavigationDirection::Forward,
+                                    is_add_mode,
+                                ));
+                                exercise_suggestions.clear();
                                 suggestion_list_state.select(None);
                             }
-                            Ok(None) => { // Enter pressed but input not resolvable -> back to input
-                                *focused_field = AddWorkoutField::Exercise;
-                                focus_changed = true;
+                            Ok(None) => {
+                                next_focus_target = Some(AddWorkoutField::Exercise);
                             }
-                             Err(e) => { // Error resolving -> back to input
+                            Err(e) => {
                                 *error_message = Some(format!("Error resolving input: {}", e));
-                                *focused_field = AddWorkoutField::Exercise;
-                                focus_changed = true;
+                                next_focus_target = Some(AddWorkoutField::Exercise);
                             }
                         }
                     }
                 }
                 KeyCode::Tab | KeyCode::Esc => {
-                    // Exit suggestion list back to input field
-                    *focused_field = AddWorkoutField::Exercise;
-                    focus_changed = true;
-                    // Keep suggestions visible for now when going back via Esc/Tab
+                    next_focus_target = Some(AddWorkoutField::Exercise);
                 }
                 _ => {}
-            },
-
-             // --- Handle other fields (Sets, Reps, etc.) ---
-             // Common pattern: Clear suggestions and move focus
-             AddWorkoutField::Sets => {
-                *exercise_suggestions = Vec::new(); suggestion_list_state.select(None); // Clear suggestions
-                match key.code {
-                    KeyCode::Char(c) if c.is_ascii_digit() => sets_input.push(c),
-                    KeyCode::Backspace => { sets_input.pop(); }
-                    KeyCode::Up => modify_numeric_input(sets_input, 1i64, Some(1i64), false),
-                    KeyCode::Down => modify_numeric_input(sets_input, -1i64, Some(1i64), false),
-                    KeyCode::Enter | KeyCode::Tab => { *focused_field = AddWorkoutField::Reps; focus_changed = true; }
-                    // Shift+Tab for reverse navigation
-                    KeyCode::BackTab => { *focused_field = AddWorkoutField::Exercise; focus_changed = true; }
-                    KeyCode::Up => { *focused_field = AddWorkoutField::Exercise; focus_changed = true; } // Simple Up goes back
-                    KeyCode::Down => { *focused_field = AddWorkoutField::Reps; focus_changed = true; } // Simple Down goes forward
-                    KeyCode::Esc => { app.active_modal = ActiveModal::None; return Ok(()); }
+            }
+        } else {
+            // Handle all other fields
+            match current_focused_field {
+                // Use the immutable `current_focused_field`
+                AddWorkoutField::Exercise => match key.code {
+                    KeyCode::Char(c) => {
+                        exercise_input.push(c);
+                        *resolved_exercise = None;
+                        needs_suggestion_update = true;
+                    }
+                    KeyCode::Backspace => {
+                        exercise_input.pop();
+                        *resolved_exercise = None;
+                        needs_suggestion_update = true;
+                    }
+                    KeyCode::Down => {
+                        if !exercise_suggestions.is_empty() {
+                            next_focus_target = Some(AddWorkoutField::Suggestions); // Request move to suggestions
+                            suggestion_list_state.select(Some(0));
+                        } else {
+                            let input_clone = exercise_input.clone();
+                            match app.service.resolve_exercise_identifier(&input_clone) {
+                                Ok(Some(def)) => {
+                                    *exercise_input = def.name.clone();
+                                    if resolved_exercise.as_ref() != Some(&def) {
+                                        repopulate_fields_for_resolved_exercise = Some(def.clone());
+                                    }
+                                    *resolved_exercise = Some(def);
+                                    next_focus_target = Some(get_next_focusable_field(
+                                        current_focused_field,
+                                        &flags,
+                                        NavigationDirection::Forward,
+                                        is_add_mode,
+                                    ));
+                                    exercise_suggestions.clear();
+                                    suggestion_list_state.select(None);
+                                }
+                                Ok(None) => {
+                                    *error_message =
+                                        Some(format!("Exercise '{}' not found.", input_clone));
+                                }
+                                Err(e) => *error_message = Some(format!("Error: {}", e)),
+                            }
+                        }
+                    }
+                    KeyCode::Tab => {
+                        let input_clone = exercise_input.clone();
+                        if resolved_exercise.is_none() && !input_clone.is_empty() {
+                            match app.service.resolve_exercise_identifier(&input_clone) {
+                                Ok(Some(def)) => {
+                                    *exercise_input = def.name.clone();
+                                    if resolved_exercise.as_ref() != Some(&def) {
+                                        repopulate_fields_for_resolved_exercise = Some(def.clone());
+                                    }
+                                    *resolved_exercise = Some(def);
+                                    next_focus_target = Some(get_next_focusable_field(
+                                        current_focused_field,
+                                        &flags,
+                                        NavigationDirection::Forward,
+                                        is_add_mode,
+                                    ));
+                                    exercise_suggestions.clear();
+                                    suggestion_list_state.select(None);
+                                }
+                                Ok(None) => {
+                                    *error_message = Some(format!(
+                                        "Exercise '{}' not found. Cannot move.",
+                                        input_clone
+                                    ));
+                                }
+                                Err(e) => {
+                                    *error_message =
+                                        Some(format!("Error resolving: {}. Cannot move.", e));
+                                }
+                            }
+                        } else {
+                            next_focus_target = Some(get_next_focusable_field(
+                                current_focused_field,
+                                &flags,
+                                NavigationDirection::Forward,
+                                is_add_mode,
+                            ));
+                            exercise_suggestions.clear();
+                            suggestion_list_state.select(None);
+                        }
+                    }
+                    KeyCode::Up => {
+                        next_focus_target = Some(get_next_focusable_field(
+                            current_focused_field,
+                            &flags,
+                            NavigationDirection::Backward,
+                            is_add_mode,
+                        ))
+                    }
+                    KeyCode::Esc => {
+                        app.active_modal = ActiveModal::None;
+                        return Ok(());
+                    }
                     _ => {}
+                },
+                AddWorkoutField::Sets => {
+                    exercise_suggestions.clear();
+                    suggestion_list_state.select(None);
+                    match key.code {
+                        KeyCode::Char(c) if c.is_ascii_digit() => sets_input.push(c),
+                        KeyCode::Backspace => {
+                            sets_input.pop();
+                        }
+                        KeyCode::Up => modify_numeric_input(sets_input, 1i64, Some(1i64), false),
+                        KeyCode::Down => modify_numeric_input(sets_input, -1i64, Some(1i64), false),
+                        KeyCode::Enter | KeyCode::Tab => {
+                            next_focus_target = Some(get_next_focusable_field(
+                                current_focused_field,
+                                &flags,
+                                NavigationDirection::Forward,
+                                is_add_mode,
+                            ))
+                        }
+                        KeyCode::BackTab => {
+                            next_focus_target = Some(get_next_focusable_field(
+                                current_focused_field,
+                                &flags,
+                                NavigationDirection::Backward,
+                                is_add_mode,
+                            ))
+                        }
+                        KeyCode::Esc => {
+                            app.active_modal = ActiveModal::None;
+                            return Ok(());
+                        }
+                        _ => {}
+                    }
                 }
-            }
-            AddWorkoutField::Reps => {
-                 *exercise_suggestions = Vec::new(); suggestion_list_state.select(None);
-                 match key.code {
-                     KeyCode::Char(c) if c.is_ascii_digit() => reps_input.push(c),
-                     KeyCode::Backspace => { reps_input.pop(); }
-                     KeyCode::Up => modify_numeric_input(reps_input, 1i64, Some(0i64), false),
-                     KeyCode::Down => modify_numeric_input(reps_input, -1i64, Some(0i64), false),
-                     KeyCode::Enter | KeyCode::Tab => { *focused_field = AddWorkoutField::Weight; focus_changed = true; }
-                     KeyCode::BackTab => { *focused_field = AddWorkoutField::Sets; focus_changed = true; }
-                     KeyCode::Up => { *focused_field = AddWorkoutField::Sets; focus_changed = true; }
-                     KeyCode::Down => { *focused_field = AddWorkoutField::Weight; focus_changed = true; }
-                     KeyCode::Esc => { app.active_modal = ActiveModal::None; return Ok(()); }
-                     _ => {}
-                 }
-            }
-            AddWorkoutField::Weight => {
-                *exercise_suggestions = Vec::new(); suggestion_list_state.select(None);
-                match key.code {
+                AddWorkoutField::Reps => match key.code {
+                    KeyCode::Char(c) if c.is_ascii_digit() => reps_input.push(c),
+                    KeyCode::Backspace => {
+                        reps_input.pop();
+                    }
+                    KeyCode::Up => modify_numeric_input(reps_input, 1i64, Some(0i64), false),
+                    KeyCode::Down => modify_numeric_input(reps_input, -1i64, Some(0i64), false),
+                    KeyCode::Enter | KeyCode::Tab => {
+                        next_focus_target = Some(get_next_focusable_field(
+                            current_focused_field,
+                            &flags,
+                            NavigationDirection::Forward,
+                            is_add_mode,
+                        ))
+                    }
+                    KeyCode::BackTab => {
+                        next_focus_target = Some(get_next_focusable_field(
+                            current_focused_field,
+                            &flags,
+                            NavigationDirection::Backward,
+                            is_add_mode,
+                        ))
+                    }
+                    KeyCode::Esc => {
+                        app.active_modal = ActiveModal::None;
+                        return Ok(());
+                    }
+                    _ => {}
+                },
+                AddWorkoutField::Weight => match key.code {
                     KeyCode::Char(c) if "0123456789.".contains(c) => weight_input.push(c),
-                    KeyCode::Backspace => { weight_input.pop(); }
+                    KeyCode::Backspace => {
+                        weight_input.pop();
+                    }
                     KeyCode::Up => modify_numeric_input(weight_input, 0.5f64, Some(0.0f64), true),
-                    KeyCode::Down => modify_numeric_input(weight_input, -0.5f64, Some(0.0f64), true),
-                    KeyCode::Enter | KeyCode::Tab => { *focused_field = AddWorkoutField::Duration; focus_changed = true; }
-                    KeyCode::BackTab => { *focused_field = AddWorkoutField::Reps; focus_changed = true; }
-                    KeyCode::Up => { *focused_field = AddWorkoutField::Reps; focus_changed = true; }
-                    KeyCode::Down => { *focused_field = AddWorkoutField::Duration; focus_changed = true; }
-                    KeyCode::Esc => { app.active_modal = ActiveModal::None; return Ok(()); }
+                    KeyCode::Down => {
+                        modify_numeric_input(weight_input, -0.5f64, Some(0.0f64), true)
+                    }
+                    KeyCode::Enter | KeyCode::Tab => {
+                        next_focus_target = Some(get_next_focusable_field(
+                            current_focused_field,
+                            &flags,
+                            NavigationDirection::Forward,
+                            is_add_mode,
+                        ))
+                    }
+                    KeyCode::BackTab => {
+                        next_focus_target = Some(get_next_focusable_field(
+                            current_focused_field,
+                            &flags,
+                            NavigationDirection::Backward,
+                            is_add_mode,
+                        ))
+                    }
+                    KeyCode::Esc => {
+                        app.active_modal = ActiveModal::None;
+                        return Ok(());
+                    }
                     _ => {}
-                }
-            }
-            AddWorkoutField::Duration => {
-                *exercise_suggestions = Vec::new(); suggestion_list_state.select(None);
-                match key.code {
+                },
+                AddWorkoutField::Duration => match key.code {
                     KeyCode::Char(c) if c.is_ascii_digit() => duration_input.push(c),
-                    KeyCode::Backspace => { duration_input.pop(); }
+                    KeyCode::Backspace => {
+                        duration_input.pop();
+                    }
                     KeyCode::Up => modify_numeric_input(duration_input, 1i64, Some(0i64), false),
                     KeyCode::Down => modify_numeric_input(duration_input, -1i64, Some(0i64), false),
-                    KeyCode::Enter | KeyCode::Tab => { *focused_field = AddWorkoutField::Distance; focus_changed = true; }
-                    KeyCode::BackTab => { *focused_field = AddWorkoutField::Weight; focus_changed = true; }
-                    KeyCode::Up => { *focused_field = AddWorkoutField::Weight; focus_changed = true; }
-                    KeyCode::Down => { *focused_field = AddWorkoutField::Distance; focus_changed = true; }
-                    KeyCode::Esc => { app.active_modal = ActiveModal::None; return Ok(()); }
+                    KeyCode::Enter | KeyCode::Tab => {
+                        next_focus_target = Some(get_next_focusable_field(
+                            current_focused_field,
+                            &flags,
+                            NavigationDirection::Forward,
+                            is_add_mode,
+                        ))
+                    }
+                    KeyCode::BackTab => {
+                        next_focus_target = Some(get_next_focusable_field(
+                            current_focused_field,
+                            &flags,
+                            NavigationDirection::Backward,
+                            is_add_mode,
+                        ))
+                    }
+                    KeyCode::Esc => {
+                        app.active_modal = ActiveModal::None;
+                        return Ok(());
+                    }
                     _ => {}
-                }
-            }
-            AddWorkoutField::Distance => {
-                *exercise_suggestions = Vec::new(); suggestion_list_state.select(None);
-                match key.code {
+                },
+                AddWorkoutField::Distance => match key.code {
                     KeyCode::Char(c) if "0123456789.".contains(c) => distance_input.push(c),
-                    KeyCode::Backspace => { distance_input.pop(); }
+                    KeyCode::Backspace => {
+                        distance_input.pop();
+                    }
                     KeyCode::Up => modify_numeric_input(distance_input, 0.1f64, Some(0.0f64), true),
-                    KeyCode::Down => modify_numeric_input(distance_input, -0.1f64, Some(0.0f64), true),
-                    KeyCode::Enter | KeyCode::Tab => { *focused_field = AddWorkoutField::Notes; focus_changed = true; }
-                    KeyCode::BackTab => { *focused_field = AddWorkoutField::Duration; focus_changed = true; }
-                    KeyCode::Up => { *focused_field = AddWorkoutField::Duration; focus_changed = true; }
-                    KeyCode::Down => { *focused_field = AddWorkoutField::Notes; focus_changed = true; }
-                    KeyCode::Esc => { app.active_modal = ActiveModal::None; return Ok(()); }
-                    _ => {}
-                }
-            }
-            AddWorkoutField::Notes => {
-                *exercise_suggestions = Vec::new(); suggestion_list_state.select(None);
-                match key.code {
-                    KeyCode::Char(c) => notes_input.push(c),
-                    KeyCode::Backspace => { notes_input.pop(); }
-                    // Treat Enter like Tab for Notes
-                    KeyCode::Enter | KeyCode::Tab => { *focused_field = AddWorkoutField::Confirm; focus_changed = true; }
-                     KeyCode::BackTab => { *focused_field = AddWorkoutField::Distance; focus_changed = true; }
-                    KeyCode::Up => { *focused_field = AddWorkoutField::Distance; focus_changed = true; }
-                    KeyCode::Down => { *focused_field = AddWorkoutField::Confirm; focus_changed = true; } // Go down to Confirm
-                    KeyCode::Esc => { app.active_modal = ActiveModal::None; return Ok(()); }
-                    _ => {}
-                }
-            }
-            AddWorkoutField::Confirm => {
-                *exercise_suggestions = Vec::new(); suggestion_list_state.select(None);
-                match key.code {
-                    KeyCode::Enter => {
-                        // Final validation before submit?
-                         if resolved_exercise.is_none() {
-                            *error_message = Some("Cannot submit: Exercise not resolved.".to_string());
-                            *focused_field = AddWorkoutField::Exercise; // Send user back to fix it
-                         } else {
-                            should_submit = true;
-                         }
+                    KeyCode::Down => {
+                        modify_numeric_input(distance_input, -0.1f64, Some(0.0f64), true)
                     }
-                    KeyCode::Left | KeyCode::Backspace | KeyCode::BackTab => { *focused_field = AddWorkoutField::Cancel; focus_changed = true; }
-                    KeyCode::Up => { *focused_field = AddWorkoutField::Notes; focus_changed = true; }
-                    KeyCode::Down | KeyCode::Tab | KeyCode::Right => { *focused_field = AddWorkoutField::Cancel; focus_changed = true; } // Wrap around
-                    KeyCode::Esc => { app.active_modal = ActiveModal::None; return Ok(()); }
+                    KeyCode::Enter | KeyCode::Tab => {
+                        next_focus_target = Some(get_next_focusable_field(
+                            current_focused_field,
+                            &flags,
+                            NavigationDirection::Forward,
+                            is_add_mode,
+                        ))
+                    }
+                    KeyCode::BackTab => {
+                        next_focus_target = Some(get_next_focusable_field(
+                            current_focused_field,
+                            &flags,
+                            NavigationDirection::Backward,
+                            is_add_mode,
+                        ))
+                    }
+                    KeyCode::Esc => {
+                        app.active_modal = ActiveModal::None;
+                        return Ok(());
+                    }
                     _ => {}
+                },
+                AddWorkoutField::Notes => {
+                    exercise_suggestions.clear();
+                    suggestion_list_state.select(None);
+                    match key.code {
+                        KeyCode::Char(c) => notes_input.push(c),
+                        KeyCode::Backspace => {
+                            notes_input.pop();
+                        }
+                        KeyCode::Enter | KeyCode::Tab => {
+                            next_focus_target = Some(get_next_focusable_field(
+                                current_focused_field,
+                                &flags,
+                                NavigationDirection::Forward,
+                                is_add_mode,
+                            ))
+                        }
+                        KeyCode::BackTab => {
+                            next_focus_target = Some(get_next_focusable_field(
+                                current_focused_field,
+                                &flags,
+                                NavigationDirection::Backward,
+                                is_add_mode,
+                            ))
+                        }
+                        KeyCode::Esc => {
+                            app.active_modal = ActiveModal::None;
+                            return Ok(());
+                        }
+                        _ => {}
+                    }
                 }
+                AddWorkoutField::Confirm => {
+                    exercise_suggestions.clear();
+                    suggestion_list_state.select(None);
+                    match key.code {
+                        KeyCode::Enter => {
+                            if resolved_exercise.is_none() {
+                                *error_message =
+                                    Some("Cannot submit: Exercise not resolved.".to_string());
+                                next_focus_target = Some(AddWorkoutField::Exercise);
+                            } else {
+                                should_submit = true;
+                            }
+                        }
+                        KeyCode::Left | KeyCode::Backspace | KeyCode::BackTab => {
+                            next_focus_target = Some(get_next_focusable_field(
+                                current_focused_field,
+                                &flags,
+                                NavigationDirection::Backward,
+                                is_add_mode,
+                            ))
+                        }
+                        KeyCode::Up => {
+                            next_focus_target = Some(get_next_focusable_field(
+                                current_focused_field,
+                                &flags,
+                                NavigationDirection::Backward,
+                                is_add_mode,
+                            ))
+                        }
+                        KeyCode::Down | KeyCode::Tab | KeyCode::Right => {
+                            next_focus_target = Some(get_next_focusable_field(
+                                current_focused_field,
+                                &flags,
+                                NavigationDirection::Forward,
+                                is_add_mode,
+                            ))
+                        }
+                        KeyCode::Esc => {
+                            app.active_modal = ActiveModal::None;
+                            return Ok(());
+                        }
+                        _ => {}
+                    }
+                }
+                AddWorkoutField::Cancel => {
+                    exercise_suggestions.clear();
+                    suggestion_list_state.select(None);
+                    match key.code {
+                        KeyCode::Enter | KeyCode::Esc => {
+                            app.active_modal = ActiveModal::None;
+                            return Ok(());
+                        }
+                        KeyCode::Right | KeyCode::Tab => {
+                            next_focus_target = Some(get_next_focusable_field(
+                                current_focused_field,
+                                &flags,
+                                NavigationDirection::Forward,
+                                is_add_mode,
+                            ))
+                        }
+                        KeyCode::Left | KeyCode::Backspace | KeyCode::BackTab => {
+                            next_focus_target = Some(get_next_focusable_field(
+                                current_focused_field,
+                                &flags,
+                                NavigationDirection::Backward,
+                                is_add_mode,
+                            ))
+                        }
+                        KeyCode::Up => {
+                            next_focus_target = Some(get_next_focusable_field(
+                                current_focused_field,
+                                &flags,
+                                NavigationDirection::Backward,
+                                is_add_mode,
+                            ))
+                        }
+                        KeyCode::Down => {
+                            next_focus_target = Some(get_next_focusable_field(
+                                current_focused_field,
+                                &flags,
+                                NavigationDirection::Forward,
+                                is_add_mode,
+                            ))
+                        }
+                        _ => {}
+                    }
+                }
+                // Suggestions state is handled above
+                AddWorkoutField::Suggestions => {}
             }
-            AddWorkoutField::Cancel => {
-                *exercise_suggestions = Vec::new(); suggestion_list_state.select(None);
-                match key.code {
-                    KeyCode::Enter | KeyCode::Esc => { app.active_modal = ActiveModal::None; return Ok(()); }
-                    KeyCode::Right | KeyCode::Tab => { *focused_field = AddWorkoutField::Confirm; focus_changed = true; }
-                    KeyCode::Left | KeyCode::Backspace | KeyCode::BackTab => { *focused_field = AddWorkoutField::Confirm; focus_changed = true; } // Cycle left from Cancel goes to Confirm
-                    KeyCode::Up => { *focused_field = AddWorkoutField::Notes; focus_changed = true; }
-                    KeyCode::Down => { *focused_field = AddWorkoutField::Exercise; focus_changed = true; } // Wrap around down
-                    _ => {}
+        }
+
+        // --- Fallback Resolution ---
+        if let Some(target) = next_focus_target {
+            if target != AddWorkoutField::Exercise
+                && target != AddWorkoutField::Suggestions
+                && resolved_exercise.is_none()
+                && !exercise_input.is_empty()
+                && is_add_mode
+            {
+                let input_clone = exercise_input.clone();
+                match app.service.resolve_exercise_identifier(&input_clone) {
+                    Ok(Some(def)) => {
+                        *exercise_input = def.name.clone();
+                        if resolved_exercise.as_ref() != Some(&def) {
+                            repopulate_fields_for_resolved_exercise = Some(def.clone());
+                        }
+                        *resolved_exercise = Some(def);
+                    }
+                    Ok(None) => {
+                        *resolved_exercise = None;
+                    } // Clear resolution if failed
+                    Err(e) => {
+                        *resolved_exercise = None;
+                        *error_message = Some(format!("Error resolving '{}': {}", input_clone, e));
+                    }
                 }
             }
         }
 
-        // If focus moved away from Exercise field and it wasn't resolved, try to resolve now.
-        // This is a fallback, main resolution happens on Tab/Enter/Suggestion select.
-        if focus_changed
-            && *focused_field != AddWorkoutField::Exercise
-            && *focused_field != AddWorkoutField::Suggestions
-            && resolved_exercise.is_none()
-            && !exercise_input.is_empty() // Only try if there's input
-        {
-            match app.service.resolve_exercise_identifier(exercise_input) {
-                Ok(Some(def)) => {
-                    *exercise_input = def.name.clone(); // Update input field too
-                    if resolved_exercise.as_ref() != Some(&def) { // Check if changed
-                         repopulate_fields_for_resolved_exercise = Some(def.clone());
-                    }
-                    *resolved_exercise = Some(def);
-                }
-                 Ok(None) => {
-                     // Allow moving away, but show error if resolution failed?
-                     // Or maybe just clear the resolved_exercise state?
-                     // Let's clear it and maybe show a warning if they try to submit.
-                     *resolved_exercise = None;
-                     // Optional: *error_message = Some(format!("Warning: Exercise '{}' not resolved.", exercise_input));
-                 }
-                Err(e) => {
-                    *resolved_exercise = None; // Clear on error too
-                    *error_message = Some(format!("Error resolving '{}': {}", exercise_input, e));
-                }
-            }
+        // --- Apply Focus Change AFTER the match ---
+        if let Some(target) = next_focus_target {
+            *focused_field = target;
         }
-
     } // End mutable borrow of app.active_modal
 
-    // --- Repopulate Fields (Deferred until borrow ends) ---
+    // --- Repopulate / Suggestions / Submit (outside borrow) ---
+    // ... (keep existing logic here) ...
     if let Some(def_to_repopulate) = repopulate_fields_for_resolved_exercise {
-        // Re-borrow mutably to update fields
         let last_workout = app.get_last_or_specific_workout(&def_to_repopulate.name, None);
         if let ActiveModal::AddWorkout {
             ref mut sets_input,
@@ -472,54 +685,77 @@ pub fn handle_add_workout_modal_input(app: &mut App, key: KeyEvent) -> Result<()
             ref mut weight_input,
             ref mut duration_input,
             ref mut distance_input,
-            // notes_input not typically repopulated
             ..
         } = app.active_modal
         {
-            if let Some(workout) = last_workout {
-                *sets_input = parse_option_to_input(workout.sets);
-                *reps_input = parse_option_to_input(workout.reps);
-                *weight_input = parse_option_to_input(workout.weight);
-                *distance_input = parse_option_to_input(workout.distance);
-                *duration_input = parse_option_to_input(workout.duration_minutes);
+            let flags = WorkoutLogFlags::from_def(Some(&def_to_repopulate)); // Get flags for repopulation
+
+            if flags.log_sets {
+                *sets_input = last_workout
+                    .as_ref()
+                    .map_or_else(|| "1".to_string(), |w| parse_option_to_input(w.sets));
+            } else {
+                *sets_input = String::new();
+            }
+            if flags.log_reps {
+                *reps_input = last_workout
+                    .as_ref()
+                    .map_or_else(String::new, |w| parse_option_to_input(w.reps));
+            } else {
+                *reps_input = String::new();
+            }
+            if flags.log_weight {
+                *weight_input = last_workout
+                    .as_ref()
+                    .map_or_else(String::new, |w| parse_option_to_input(w.weight));
+            } else {
+                *weight_input = String::new();
+            }
+            if flags.log_duration {
+                *duration_input = last_workout
+                    .as_ref()
+                    .map_or_else(String::new, |w| parse_option_to_input(w.duration_minutes));
+            } else {
+                *duration_input = String::new();
+            }
+            if flags.log_distance {
+                *distance_input = last_workout
+                    .as_ref()
+                    .map_or_else(String::new, |w| parse_option_to_input(w.distance));
+            } else {
+                *distance_input = String::new();
             }
         }
     }
 
-    // --- Filter suggestions (Deferred until borrow ends) ---
     if needs_suggestion_update {
         app.filter_exercise_suggestions();
     }
 
-    // --- Submission Logic (runs only if should_submit is true) ---
     if should_submit {
-        // Clone the state *before* calling submit, as submit needs immutable borrow
         let modal_state_clone = app.active_modal.clone();
         if let ActiveModal::AddWorkout { .. } = modal_state_clone {
             submission_result = submit_add_workout(app, &modal_state_clone);
         } else {
-            // This case should be rare due to the check within the Confirm handler
             submission_result = Err(AppInputError::DbError(
-                "Internal Error: Modal state changed unexpectedly before submit".to_string(),
+                "Internal Error: Modal state changed".to_string(),
             ));
         }
 
-        // --- Handle Submission Result ---
-        if let Ok(result) = submission_result {
-            if !result {
-                app.active_modal = ActiveModal::None; // Close modal on success
-                                                      // Data refresh will happen in the main loop
+        match submission_result {
+            Ok(pb_modal_opened) => {
+                if !pb_modal_opened {
+                    app.active_modal = ActiveModal::None;
+                }
             }
-        } else {
-            // Re-borrow mutably ONLY if necessary to set error
-            if let ActiveModal::AddWorkout {
-                ref mut error_message,
-                ..
-            } = app.active_modal
-            {
-                *error_message = Some(submission_result.unwrap_err().to_string());
-                // Optionally, set focus back to a relevant field? e.g., Exercise if that was the issue?
-                // Or just keep focus where it was (Confirm button).
+            Err(err) => {
+                if let ActiveModal::AddWorkout {
+                    ref mut error_message,
+                    ..
+                } = app.active_modal
+                {
+                    *error_message = Some(err.to_string());
+                }
             }
         }
     }

@@ -82,6 +82,7 @@ pub fn print_workout_table(workouts: Vec<Workout>, header_color: Color, units: U
                 Units::Metric => km,
                 Units::Imperial => km * KM_TO_MILE,
             });
+            let weight = workout.calculate_effective_weight();
 
             vec![
                 workout.id.to_string(),
@@ -100,9 +101,7 @@ pub fn print_workout_table(workouts: Vec<Workout>, header_color: Color, units: U
                 workout
                     .reps
                     .map_or(EMPTY_PLACEHOLDER.to_string(), |v| v.to_string()),
-                workout
-                    .weight
-                    .map_or(EMPTY_PLACEHOLDER.to_string(), |v| format!("{v:.2}")),
+                weight.map_or(EMPTY_PLACEHOLDER.to_string(), |v| format!("{v:.2}")),
                 workout
                     .duration_minutes
                     .map_or(EMPTY_PLACEHOLDER.to_string(), |v| v.to_string()),

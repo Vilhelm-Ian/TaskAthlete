@@ -6,6 +6,7 @@ mod handlers; // NEW: Include handlers module
 mod output; // NEW: Include output module
 
 use anyhow::{Context, Result};
+use clap_complete::aot::utils::flags;
 use std::io::stdout;
 use task_athlete_lib::AppService;
 
@@ -35,13 +36,27 @@ fn main() -> Result<()> {
             name,
             type_,
             muscles,
-        } => handlers::handle_create_exercise(&mut service, name, type_, muscles)?,
+            duration,
+            distance,
+            weight,
+            reps,
+        } => {
+            let flags = convert_flags(weight, reps, duration, distance);
+            handlers::handle_create_exercise(&mut service, name, type_, muscles, flags)?
+        }
         cli::Commands::EditExercise {
             identifier,
             name,
             type_,
             muscles,
-        } => handlers::handle_edit_exercise(&mut service, identifier, name, type_, muscles)?,
+            duration,
+            distance,
+            weight,
+            reps,
+        } => {
+            let flags = convert_flags(duration, distance, weight, reps);
+            handlers::handle_edit_exercise(&mut service, identifier, name, type_, muscles, flags)?
+        }
         cli::Commands::DeleteExercise { identifiers } => {
             handlers::handle_delete_exercise(&mut service, identifiers)?
         }
@@ -81,6 +96,7 @@ fn main() -> Result<()> {
             distance,
             notes,
             date,
+            bodyweight,
         } => handlers::handle_edit_workout(
             &mut service,
             id,
@@ -92,10 +108,9 @@ fn main() -> Result<()> {
             distance,
             notes,
             date,
+            bodyweight,
         )?,
-        cli::Commands::DeleteWorkout { ids } => {
-            handlers::handle_delete_workout(&mut service, ids)?
-        }
+        cli::Commands::DeleteWorkout { ids } => handlers::handle_delete_workout(&mut service, ids)?,
 
         // --- Listing and Stats Commands ---
         cli::Commands::List {
@@ -109,7 +124,7 @@ fn main() -> Result<()> {
             nth_last_day_exercise,
             nth_last_day_n,
         } => handlers::handle_list_workouts(
-            &service, // Immutable borrow is fine here
+            &service,   // Immutable borrow is fine here
             export_csv, // Pass the flag
             limit,
             today_flag,
@@ -123,7 +138,7 @@ fn main() -> Result<()> {
         )?,
         cli::Commands::Stats { exercise } => {
             handlers::handle_stats(
-                &service, // Immutable borrow is fine here
+                &service,   // Immutable borrow is fine here
                 export_csv, // Pass the flag
                 exercise,
             )?
@@ -137,22 +152,15 @@ fn main() -> Result<()> {
             start_date,
             end_date,
         } => handlers::handle_volume(
-            &service, // Immutable borrow is fine here
+            &service,   // Immutable borrow is fine here
             export_csv, // Pass the flag
-            exercise,
-            date,
-            type_,
-            muscle,
-            limit_days,
-            start_date,
-            end_date,
+            exercise, date, type_, muscle, limit_days, start_date, end_date,
         )?,
         cli::Commands::ListExercises { type_, muscle } => {
             handlers::handle_list_exercises(
-                &service, // Immutable borrow is fine here
+                &service,   // Immutable borrow is fine here
                 export_csv, // Pass the flag
-                type_,
-                muscle,
+                type_, muscle,
             )?
         }
 
@@ -166,7 +174,7 @@ fn main() -> Result<()> {
         }
         cli::Commands::ListAliases => {
             handlers::handle_list_aliases(
-                &service, // Immutable borrow is fine here
+                &service,   // Immutable borrow is fine here
                 export_csv, // Pass the flag
             )?
         }
@@ -186,7 +194,7 @@ fn main() -> Result<()> {
         }
         cli::Commands::ListBodyweights { limit } => {
             handlers::handle_list_bodyweights(
-                &service, // Immutable borrow is fine here
+                &service,   // Immutable borrow is fine here
                 export_csv, // Pass the flag
                 limit,
             )?
@@ -197,46 +205,36 @@ fn main() -> Result<()> {
         cli::Commands::SetTargetWeight { weight } => {
             handlers::handle_set_target_weight(&mut service, weight)?
         }
-        cli::Commands::ClearTargetWeight => {
-            handlers::handle_clear_target_weight(&mut service)?
-        }
+        cli::Commands::ClearTargetWeight => handlers::handle_clear_target_weight(&mut service)?,
 
         // --- PB Notification Settings ---
         cli::Commands::SetPbNotification { enabled } => {
             handlers::handle_set_pb_notification(&mut service, enabled)?
         }
-        cli::Commands::SetPbNotifyWeight { enabled } => {
-            handlers::handle_set_pb_notify_metric(
-                &mut service,
-                "Weight",
-                enabled,
-                AppService::set_pb_notify_weight,
-            )?
-        }
-        cli::Commands::SetPbNotifyReps { enabled } => {
-            handlers::handle_set_pb_notify_metric(
-                &mut service,
-                "Reps",
-                enabled,
-                AppService::set_pb_notify_reps,
-            )?
-        }
-        cli::Commands::SetPbNotifyDuration { enabled } => {
-            handlers::handle_set_pb_notify_metric(
-                &mut service,
-                "Duration",
-                enabled,
-                AppService::set_pb_notify_duration,
-            )?
-        }
-        cli::Commands::SetPbNotifyDistance { enabled } => {
-            handlers::handle_set_pb_notify_metric(
-                &mut service,
-                "Distance",
-                enabled,
-                AppService::set_pb_notify_distance,
-            )?
-        }
+        cli::Commands::SetPbNotifyWeight { enabled } => handlers::handle_set_pb_notify_metric(
+            &mut service,
+            "Weight",
+            enabled,
+            AppService::set_pb_notify_weight,
+        )?,
+        cli::Commands::SetPbNotifyReps { enabled } => handlers::handle_set_pb_notify_metric(
+            &mut service,
+            "Reps",
+            enabled,
+            AppService::set_pb_notify_reps,
+        )?,
+        cli::Commands::SetPbNotifyDuration { enabled } => handlers::handle_set_pb_notify_metric(
+            &mut service,
+            "Duration",
+            enabled,
+            AppService::set_pb_notify_duration,
+        )?,
+        cli::Commands::SetPbNotifyDistance { enabled } => handlers::handle_set_pb_notify_metric(
+            &mut service,
+            "Distance",
+            enabled,
+            AppService::set_pb_notify_distance,
+        )?,
         cli::Commands::SetStreakInterval { days } => {
             handlers::handle_set_streak_interval(&mut service, days)?
         }
@@ -248,4 +246,16 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn convert_flags(
+    weight: bool,
+    reps: bool,
+    duration: bool,
+    distance: bool,
+) -> Option<(Option<bool>, Option<bool>, Option<bool>, Option<bool>)> {
+    match (duration, distance, weight, reps) {
+        (false, false, false, false) => None,
+        _ => Some((Some(duration), Some(distance), Some(weight), Some(reps))),
+    }
 }

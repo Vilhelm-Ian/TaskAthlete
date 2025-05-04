@@ -157,9 +157,10 @@ pub fn handle_create_exercise(
     name: String,
     type_: cli::ExerciseTypeCli,
     muscles: Option<String>,
+    log_flags: Option<(Option<bool>, Option<bool>, Option<bool>, Option<bool>)>,
 ) -> Result<()> {
     let db_type = cli_type_to_db_type(type_);
-    match service.create_exercise(&name, db_type, muscles.as_deref()) {
+    match service.create_exercise(&name, db_type, log_flags, muscles.as_deref()) {
         Ok(id) => println!(
             "Successfully defined exercise: '{}' (Type: {}, Muscles: {}) ID: {}",
             name.trim(),
@@ -178,6 +179,7 @@ pub fn handle_edit_exercise(
     name: Option<String>,
     type_: Option<cli::ExerciseTypeCli>,
     muscles: Option<String>,
+    log_flags: Option<(Option<bool>, Option<bool>, Option<bool>, Option<bool>)>,
 ) -> Result<()> {
     let db_type = type_.map(cli_type_to_db_type);
     let muscles_update = match muscles {
@@ -186,7 +188,13 @@ pub fn handle_edit_exercise(
         None => None,
     };
 
-    match service.edit_exercise(&identifier, name.as_deref(), db_type, muscles_update) {
+    match service.edit_exercise(
+        &identifier,
+        name.as_deref(),
+        db_type,
+        log_flags,
+        muscles_update,
+    ) {
         Ok(rows) => {
             println!(
                 "Successfully updated exercise definition '{}' ({} row(s) affected).",
@@ -325,6 +333,7 @@ pub fn handle_edit_workout(
     distance: Option<f64>,
     notes: Option<String>,
     date: Option<NaiveDate>,
+    body_weight: Option<f64>,
 ) -> Result<()> {
     match service.edit_workout(EditWorkoutParams {
         id,
@@ -336,6 +345,7 @@ pub fn handle_edit_workout(
         new_distance_arg: distance,
         new_notes: notes,
         new_date: date,
+        new_bodyweight: body_weight,
     }) {
         Ok(rows) => println!(
             "Successfully updated workout ID {} ({} row(s) affected).",

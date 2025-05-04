@@ -3,6 +3,7 @@
 use crate::app::state::{ActiveModal, AddExerciseField, App};
 use crate::app::AppInputError;
 use anyhow::Result;
+use chrono::Duration;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use task_athlete_lib::{DbError, ExerciseType};
 
@@ -13,6 +14,10 @@ fn submit_create_exercise(app: &App, modal_state: &ActiveModal) -> Result<(), Ap
         name_input,
         muscles_input,
         selected_type,
+        log_weight,
+        log_reps,
+        log_duration,
+        log_distance,
         // ignore focused_field, error_message
         ..
     } = modal_state
@@ -28,10 +33,12 @@ fn submit_create_exercise(app: &App, modal_state: &ActiveModal) -> Result<(), Ap
             Some(muscles_input.trim())
         };
 
+        let arguments = convert_flags(*log_duration, *log_distance, *log_weight, *log_reps);
+
         // Call AppService to create the exercise
         match app
             .service
-            .create_exercise(trimmed_name, *selected_type, muscles_opt)
+            .create_exercise(trimmed_name, *selected_type, arguments, muscles_opt)
         {
             Ok(_) => Ok(()), // Signal success to close modal
             Err(e) => {
@@ -75,6 +82,10 @@ pub fn handle_create_exercise_modal_input(app: &mut App, key: KeyEvent) -> Resul
         ref mut selected_type,
         ref mut focused_field,
         ref mut error_message,
+        ref mut log_weight,
+        ref mut log_reps,
+        ref mut log_duration,
+        ref mut log_distance,
     } = app.active_modal
     {
         // Always clear error on any input
@@ -88,6 +99,10 @@ pub fn handle_create_exercise_modal_input(app: &mut App, key: KeyEvent) -> Resul
                 AddExerciseField::TypeResistance => *focused_field = AddExerciseField::Muscles,
                 AddExerciseField::TypeCardio => *focused_field = AddExerciseField::TypeResistance,
                 AddExerciseField::TypeBodyweight => *focused_field = AddExerciseField::TypeCardio,
+                AddExerciseField::LogWeight => *focused_field = AddExerciseField::TypeBodyweight,
+                AddExerciseField::LogReps => *focused_field = AddExerciseField::LogWeight,
+                AddExerciseField::LogDuration => *focused_field = AddExerciseField::LogReps,
+                AddExerciseField::LogDistance => *focused_field = AddExerciseField::LogDuration,
                 AddExerciseField::Confirm => *focused_field = AddExerciseField::TypeBodyweight,
                 AddExerciseField::Cancel => *focused_field = AddExerciseField::Confirm,
             }
@@ -133,11 +148,18 @@ pub fn handle_create_exercise_modal_input(app: &mut App, key: KeyEvent) -> Resul
                 // --- Type Selection Fields ---
                 // Enter confirms selection, Right/Tab/Down moves to next type, Left wraps or moves back
                 AddExerciseField::TypeResistance => match key.code {
-                    KeyCode::Enter => *selected_type = ExerciseType::Resistance,
-                    KeyCode::Right | KeyCode::Tab | KeyCode::Down => {
+                    KeyCode::Enter => {
+                        *selected_type = ExerciseType::Resistance;
+                        *log_weight = true;
+                        *log_reps = true;
+                        *log_duration = false;
+                        *log_distance = false;
+                    }
+                    KeyCode::Right | KeyCode::Tab => {
                         *focused_field = AddExerciseField::TypeCardio;
                         // focus_changed = true;
                     }
+                    KeyCode::Down => *focused_field = AddExerciseField::LogWeight,
                     KeyCode::Left | KeyCode::BackTab => {
                         // Also allow BackTab to go to Muscles
                         *focused_field = AddExerciseField::Muscles;
@@ -154,11 +176,18 @@ pub fn handle_create_exercise_modal_input(app: &mut App, key: KeyEvent) -> Resul
                     _ => {}
                 },
                 AddExerciseField::TypeCardio => match key.code {
-                    KeyCode::Enter => *selected_type = ExerciseType::Cardio,
-                    KeyCode::Right | KeyCode::Tab | KeyCode::Down => {
+                    KeyCode::Enter => {
+                        *selected_type = ExerciseType::Cardio;
+                        *log_weight = false;
+                        *log_reps = false;
+                        *log_duration = true;
+                        *log_distance = true;
+                    }
+                    KeyCode::Right | KeyCode::Tab => {
                         *focused_field = AddExerciseField::TypeBodyweight;
                         // focus_changed = true;
                     }
+                    KeyCode::Down => *focused_field = AddExerciseField::LogWeight,
                     KeyCode::Left | KeyCode::BackTab => {
                         *focused_field = AddExerciseField::TypeResistance;
                         // focus_changed = true;
@@ -175,10 +204,16 @@ pub fn handle_create_exercise_modal_input(app: &mut App, key: KeyEvent) -> Resul
                     _ => {}
                 },
                 AddExerciseField::TypeBodyweight => match key.code {
-                    KeyCode::Enter => *selected_type = ExerciseType::BodyWeight,
+                    KeyCode::Enter => {
+                        *selected_type = ExerciseType::BodyWeight;
+                        *log_weight = false;
+                        *log_reps = true;
+                        *log_duration = false;
+                        *log_distance = false;
+                    }
                     KeyCode::Right | KeyCode::Tab | KeyCode::Down => {
-                        *focused_field = AddExerciseField::Confirm; // Move to confirm
-                                                                    // focus_changed = true;
+                        *focused_field = AddExerciseField::LogWeight; // Move to confirm
+                                                                      // focus_changed = true;
                     }
                     KeyCode::Left | KeyCode::BackTab => {
                         *focused_field = AddExerciseField::TypeCardio;
@@ -189,6 +224,61 @@ pub fn handle_create_exercise_modal_input(app: &mut App, key: KeyEvent) -> Resul
                         *focused_field = AddExerciseField::TypeCardio;
                         // focus_changed = true;
                     }
+                    KeyCode::Esc => {
+                        app.active_modal = ActiveModal::None;
+                        return Ok(());
+                    }
+                    _ => {}
+                },
+                // --- Logging Flags Checkboxes ---
+                AddExerciseField::LogWeight => match key.code {
+                    KeyCode::Enter | KeyCode::Char(' ') => *log_weight = !*log_weight,
+                    KeyCode::Right | KeyCode::Tab => *focused_field = AddExerciseField::LogReps,
+                    KeyCode::Left | KeyCode::BackTab => {
+                        *focused_field = AddExerciseField::TypeBodyweight
+                    } // Wrap around or go back up
+                    KeyCode::Down => *focused_field = AddExerciseField::Confirm, // Jump down to Confirm
+                    KeyCode::Up => *focused_field = AddExerciseField::TypeBodyweight, // Jump up to last type
+                    KeyCode::Esc => {
+                        app.active_modal = ActiveModal::None;
+                        return Ok(());
+                    }
+                    _ => {}
+                },
+                AddExerciseField::LogReps => match key.code {
+                    KeyCode::Enter | KeyCode::Char(' ') => *log_reps = !*log_reps,
+                    KeyCode::Right | KeyCode::Tab => *focused_field = AddExerciseField::LogDuration,
+                    KeyCode::Left | KeyCode::BackTab => {
+                        *focused_field = AddExerciseField::LogWeight
+                    }
+                    KeyCode::Down => *focused_field = AddExerciseField::Confirm, // Jump down to Confirm
+                    KeyCode::Up => *focused_field = AddExerciseField::TypeBodyweight, // Jump up to last type
+                    KeyCode::Esc => {
+                        app.active_modal = ActiveModal::None;
+                        return Ok(());
+                    }
+                    _ => {}
+                },
+                AddExerciseField::LogDuration => match key.code {
+                    KeyCode::Enter | KeyCode::Char(' ') => *log_duration = !*log_duration,
+                    KeyCode::Right | KeyCode::Tab => *focused_field = AddExerciseField::LogDistance,
+                    KeyCode::Left | KeyCode::BackTab => *focused_field = AddExerciseField::LogReps,
+                    KeyCode::Down => *focused_field = AddExerciseField::Confirm, // Jump down to Confirm
+                    KeyCode::Up => *focused_field = AddExerciseField::TypeBodyweight, // Jump up to last type
+                    KeyCode::Esc => {
+                        app.active_modal = ActiveModal::None;
+                        return Ok(());
+                    }
+                    _ => {}
+                },
+                AddExerciseField::LogDistance => match key.code {
+                    KeyCode::Enter | KeyCode::Char(' ') => *log_distance = !*log_distance,
+                    KeyCode::Right | KeyCode::Tab => *focused_field = AddExerciseField::Confirm, // Wrap around to Confirm
+                    KeyCode::Left | KeyCode::BackTab => {
+                        *focused_field = AddExerciseField::LogDuration
+                    }
+                    KeyCode::Down => *focused_field = AddExerciseField::Confirm, // Jump down to Confirm
+                    KeyCode::Up => *focused_field = AddExerciseField::TypeBodyweight, // Jump up to last type
                     KeyCode::Esc => {
                         app.active_modal = ActiveModal::None;
                         return Ok(());
@@ -206,7 +296,7 @@ pub fn handle_create_exercise_modal_input(app: &mut App, key: KeyEvent) -> Resul
                     }
                     KeyCode::Up => {
                         // Jump back up to the last type field
-                        *focused_field = AddExerciseField::TypeBodyweight;
+                        *focused_field = AddExerciseField::LogDistance;
                         // focus_changed = true;
                     }
                     KeyCode::Right | KeyCode::Tab | KeyCode::Down => {
@@ -276,4 +366,16 @@ pub fn handle_create_exercise_modal_input(app: &mut App, key: KeyEvent) -> Resul
     }
 
     Ok(())
+}
+
+fn convert_flags(
+    weight: bool,
+    reps: bool,
+    duration: bool,
+    distance: bool,
+) -> Option<(Option<bool>, Option<bool>, Option<bool>, Option<bool>)> {
+    match (duration, distance, weight, reps) {
+        (false, false, false, false) => None,
+        _ => Some((Some(duration), Some(distance), Some(weight), Some(reps))),
+    }
 }

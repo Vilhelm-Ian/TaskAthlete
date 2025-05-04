@@ -59,6 +59,18 @@ pub enum Commands {
         /// Comma-separated list of target muscles (e.g., "chest,triceps,shoulders")
         #[arg(short, long)]
         muscles: Option<String>,
+        /// Should exercise log distance
+        #[arg[short, long, action]]
+        distance: bool,
+        /// Should exercise log duration
+        #[arg[long, action]]
+        duration: bool,
+        /// Should exercise log reps
+        #[arg[short, long, action]]
+        reps: bool,
+        /// Should exercise log weight
+        #[arg[short, long, action]]
+        weight: bool,
     },
     /// Delete an exercise definition
     DeleteExercise {
@@ -78,6 +90,18 @@ pub enum Commands {
         /// New comma-separated list of target muscles
         #[arg(short, long)]
         muscles: Option<String>,
+        /// Should exercise log distance
+        #[arg[long, action]]
+        distance: bool,
+        /// Should exercise log duration
+        #[arg[short, long, action]]
+        duration: bool,
+        /// Should exercise log reps
+        #[arg[short, long, action]]
+        reps: bool,
+        /// Should exercise log weight
+        #[arg[short, long, action]]
+        weight: bool,
     },
     /// Add a new workout entry
     Add {
@@ -154,6 +178,8 @@ pub enum Commands {
         /// New date for the workout ('today', 'yesterday', YYYY-MM-DD, DD.MM.YYYY, YYYY/MM/DD)
         #[arg(long, value_parser = parse_date_shorthand)] // Feature 3 (for editing date)
         date: Option<NaiveDate>,
+        #[arg(long)]
+        bodyweight: Option<f64>,
     },
     /// Delete a workout entry
     DeleteWorkout {

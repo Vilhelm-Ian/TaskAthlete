@@ -42,6 +42,10 @@ pub enum AddExerciseField {
     TypeResistance, // Represents focus on the "Resistance" option
     TypeCardio,     // Represents focus on the "Cardio" option
     TypeBodyweight, // Represents focus on the "BodyWeight" option
+    LogWeight,
+    LogReps,
+    LogDuration,
+    LogDistance,
     Confirm,
     Cancel,
 }
@@ -134,6 +138,11 @@ pub enum ActiveModal {
         selected_type: ExerciseType, // Store the currently selected type
         focused_field: AddExerciseField,
         error_message: Option<String>,
+        // Logging flags checkboxes
+        log_weight: bool,
+        log_reps: bool,
+        log_duration: bool,
+        log_distance: bool,
     },
     EditWorkout {
         workout_id: u64,       // ID of the workout being edited

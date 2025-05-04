@@ -21,6 +21,10 @@ pub(super) fn render_create_exercise_modal(f: &mut Frame, app: &App) {
         selected_type,
         focused_field,
         error_message,
+        log_weight,
+        log_reps,
+        log_duration,
+        log_distance,
     } = &app.active_modal
     {
         let block = Block::default()
@@ -29,7 +33,18 @@ pub(super) fn render_create_exercise_modal(f: &mut Frame, app: &App) {
             .border_style(Style::new().yellow());
 
         let has_error = error_message.is_some();
-        let height = 10 + if has_error { 1 } else { 0 };
+        // Calculate required height:
+        // 2 lines for Name input field (label + box)
+        // 2 lines for Muscles input field (label + box)
+        // 1 line for Type label
+        // 1 line for Type options
+        // 1 line for Logging label
+        // 1 line for Logging checkboxes
+        // 1 line spacer
+        // 1 line for buttons
+        // Total content lines = 10 + 1 (optional error)
+        // Add 2 lines for modal top/bottom borders = 12 or 13 total height
+        let height = 12 + u16::from(has_error);
         let area = centered_rect(60, height, f.size());
 
         f.render_widget(Clear, area);
@@ -45,6 +60,8 @@ pub(super) fn render_create_exercise_modal(f: &mut Frame, app: &App) {
             Constraint::Length(2), // Muscles field
             Constraint::Length(1), // Type label
             Constraint::Length(1), // Type options
+            Constraint::Length(1), // Logging label
+            Constraint::Length(1), // Logging checkboxes
             Constraint::Length(1), // Spacer
             Constraint::Length(1), // Buttons row
         ];
@@ -76,14 +93,26 @@ pub(super) fn render_create_exercise_modal(f: &mut Frame, app: &App) {
         f.render_widget(Paragraph::new("Type:"), chunks[2]);
         render_exercise_type_options(f, chunks[3], selected_type, focused_field);
 
+        f.render_widget(Paragraph::new("Logging:"), chunks[4]);
+
+        render_log_flag_checkboxes(
+            f,
+            chunks[5], // Chunk for checkboxes
+            *log_weight,
+            *log_reps,
+            *log_duration,
+            *log_distance,
+            focused_field,
+        );
+
         let button_focus = match focused_field {
             AddExerciseField::Confirm => Some(0),
             AddExerciseField::Cancel => Some(1),
             _ => None,
         };
-        render_button_pair(f, chunks[5], "OK", "Cancel", button_focus); // Buttons in chunk 5 (after spacer)
+        render_button_pair(f, chunks[7], "OK", "Cancel", button_focus); // Buttons in chunk 5 (after spacer)
 
-        let error_chunk_index = 6;
+        let error_chunk_index = 8;
         if chunks.len() > error_chunk_index {
             render_error_message(f, chunks[error_chunk_index], error_message.as_ref());
         }
@@ -171,6 +200,50 @@ fn position_cursor_for_create_exercise(
                 .min(muscles_area.right().saturating_sub(1));
             f.set_cursor(cursor_x, muscles_area.y);
         }
-        _ => {} // No cursor for type selection or buttons
+        _ => {} // No cursor for type selection or buttons or checkboxes
+    }
+}
+
+/// Renders the logging flag checkboxes.
+fn render_log_flag_checkboxes(
+    f: &mut Frame,
+    area: Rect,
+    log_weight: bool,
+    log_reps: bool,
+    log_duration: bool,
+    log_distance: bool,
+    focused_field: &AddExerciseField,
+) {
+    let checkboxes_layout = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
+        ])
+        .split(area);
+
+    let fields = [
+        AddExerciseField::LogWeight,
+        AddExerciseField::LogReps,
+        AddExerciseField::LogDuration,
+        AddExerciseField::LogDistance,
+    ];
+    let states = [log_weight, log_reps, log_duration, log_distance];
+    let labels = ["Weight", "Reps", "Duration", "Distance"];
+
+    for i in 0..4 {
+        let is_focused = *focused_field == fields[i];
+        let state_char = if states[i] { "[x]" } else { "[ ]" };
+        let text = format!("{} {}", state_char, labels[i]);
+        let style = Style::default()
+            .fg(Color::White)
+            .add_modifier(if is_focused {
+                Modifier::REVERSED
+            } else {
+                Modifier::empty()
+            });
+        f.render_widget(Paragraph::new(text).style(style), checkboxes_layout[i]);
     }
 }

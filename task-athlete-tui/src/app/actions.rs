@@ -282,7 +282,11 @@ impl App {
             muscles_input: String::new(),
             selected_type: ExerciseType::Resistance, // Default to Resistance
             focused_field: AddExerciseField::Name,   // Start focus on name
+            log_weight: true,
+            log_reps: true,
             error_message: None,
+            log_duration: true,
+            log_distance: true,
         };
         Ok(())
     }

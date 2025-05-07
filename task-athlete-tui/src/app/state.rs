@@ -243,6 +243,8 @@ pub struct App {
     pub graph_data_points: Vec<(f64, f64)>, // Processed data for the chart
     pub graph_x_bounds: [f64; 2],         // X-axis bounds for the chart
     pub graph_y_bounds: [f64; 2],
+    pub graph_start_date_filter: Option<NaiveDate>,
+    pub graph_end_date_filter: Option<NaiveDate>,
 
     // === Bodyweight Tab State ===
     pub bw_focus: BodyweightFocus,
@@ -297,6 +299,8 @@ impl App {
             graph_data_points: Vec::new(),
             graph_x_bounds: [0.0, 1.0], // Default bounds
             graph_y_bounds: [0.0, 1.0], // Default bounds
+            graph_start_date_filter: None,
+            graph_end_date_filter: None,
             // --- Bodyweight Tab State ---
             bw_focus: BodyweightFocus::History,
             bw_history: Vec::new(),

@@ -1,7 +1,7 @@
 use super::state::App;
 use anyhow::Result;
 use chrono::{Datelike, Duration, NaiveDate, Utc};
- // Import Line, Span
+// Import Line, Span
 use std::collections::HashMap;
 use task_athlete_lib::Units;
 use task_athlete_lib::{DbError, GraphType as LibGraphType, Workout, WorkoutFilters};
@@ -238,26 +238,52 @@ impl App {
     pub(crate) fn update_graph_data(&mut self) {
         let mut should_clear = false;
         if let (Some(ex_name), Some(graph_type)) = (
-            self.graph_selected_exercise.as_ref(),
+            self.graph_selected_exercise.as_ref(), // Take as ref if ex_name is &str
             self.graph_selected_type,
         ) {
-            match self.service.get_data_for_graph(ex_name, graph_type) {
-                Ok(data) if !data.is_empty() => {
-                    self.graph_data_points = data;
+            // Pass the date filters to get_data_for_graph
+            match self.service.get_data_for_graph(
+                ex_name, // Assuming ex_name is &str or can be dereferenced
+                graph_type,
+                self.graph_start_date_filter, // Use existing or add these fields
+                self.graph_end_date_filter,   // to your TUI state struct
+            ) {
+                Ok(raw_data) if !raw_data.is_empty() => {
+                    // raw_data is Vec<(NaiveDate, f64)>
 
-                    // Calculate bounds
-                    let first_day = self
-                        .graph_data_points
-                        .first()
-                        .map(|(x, _)| *x)
-                        .unwrap_or(0.0);
-                    let last_day = self
-                        .graph_data_points
-                        .last()
-                        .map(|(x, _)| *x)
-                        .unwrap_or(first_day + 1.0);
-                    self.graph_x_bounds = [first_day, last_day];
+                    // Determine the actual first and last dates from the dataset
+                    // unwrap() is safe here because raw_data is not empty.
+                    let actual_first_date = raw_data.first().unwrap().0;
+                    let actual_last_date = raw_data.last().unwrap().0;
 
+                    // (Optional) Store the first date if you need to map relative f64 days back to NaiveDate
+                    // for display purposes (e.g., axis labels, tooltips).
+                    // self.graph_actual_first_date = Some(actual_first_date);
+
+                    // Transform Vec<(NaiveDate, f64)> to Vec<(f64, f64)> for plotting
+                    // where the f64 x-value is days relative to the actual_first_date.
+                    let plot_points: Vec<(f64, f64)> = raw_data
+                        .iter()
+                        .map(|(date, value)| {
+                            let relative_day = (*date - actual_first_date).num_days() as f64;
+                            (relative_day, *value)
+                        })
+                        .collect();
+
+                    self.graph_data_points = plot_points;
+
+                    // Calculate X bounds based on relative days
+                    let first_day_f64 = 0.0; // The first data point is now at x = 0.0
+                    let mut last_day_f64 = (actual_last_date - actual_first_date).num_days() as f64;
+
+                    // Ensure graph_x_bounds have some width, especially if all data is on the same relative day (0.0)
+                    if last_day_f64 < first_day_f64 + 0.1 {
+                        // If last_day_f64 is effectively 0.0
+                        last_day_f64 = first_day_f64 + 1.0; // Create a window of at least 1.0 unit
+                    }
+                    self.graph_x_bounds = [first_day_f64, last_day_f64];
+
+                    // Calculate Y bounds (this logic remains largely the same)
                     let min_y = self
                         .graph_data_points
                         .iter()
@@ -268,17 +294,25 @@ impl App {
                         .iter()
                         .map(|(_, y)| *y)
                         .fold(f64::NEG_INFINITY, f64::max);
+
+                    // Handle cases like single data point or all y-values being the same for y_padding
                     let y_range = max_y - min_y;
-                    let y_padding = (y_range * 0.1).max(1.0); // Add at least 1 unit padding
+                    let y_padding = if y_range.abs() < f64::EPSILON {
+                        // If min_y is very close to max_y
+                        (max_y.abs() * 0.1).max(1.0) // 10% of the value, or at least 1.0
+                    } else {
+                        (y_range * 0.1).max(1.0) // 10% of range, or at least 1.0
+                    };
+
                     self.graph_y_bounds = [(min_y - y_padding).max(0.0), max_y + y_padding];
                 }
                 Ok(_) => {
-                    // Empty data returned
+                    // Empty data returned (raw_data was empty)
                     should_clear = true;
                     self.set_error(format!(
                         "No data found for '{}' - {}",
                         ex_name,
-                        graph_type_to_string(graph_type)
+                        graph_type_to_string(graph_type) // Ensure this helper is available
                     ));
                 }
                 Err(e) => {
@@ -289,8 +323,11 @@ impl App {
         } else {
             should_clear = true;
         }
+
         if should_clear {
             self.clear_graph_data();
+            // Optional: also clear actual_first_date if you added it
+            // self.graph_actual_first_date = None;
         }
     }
 

@@ -4,6 +4,7 @@ use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Datelike, Duration, NaiveDate, TimeZone, Utc};
 use db::NewWorkoutData; // Import specific struct needed
 use rusqlite::Connection;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -72,7 +73,7 @@ pub struct EditWorkoutParams {
     pub new_date: Option<NaiveDate>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GraphType {
     Estimated1RM,
     MaxWeight,
@@ -98,14 +99,14 @@ pub struct AddWorkoutParams<'a> {
     pub bodyweight_to_use: Option<f64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
 pub struct PbMetricInfo<T: PartialEq + Default + Copy> {
     pub achieved: bool,
     pub new_value: Option<T>,
     pub previous_value: Option<T>,
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct PBInfo {
     pub weight: PbMetricInfo<f64>,
     pub reps: PbMetricInfo<i64>,
@@ -124,7 +125,7 @@ impl PBInfo {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 pub struct PersonalBests {
     pub max_weight: Option<f64>,
     pub max_reps: Option<i64>,
@@ -132,7 +133,7 @@ pub struct PersonalBests {
     pub max_distance_km: Option<f64>, // Always store in km
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ExerciseStats {
     pub canonical_name: String,
     pub total_workouts: usize,
@@ -894,6 +895,23 @@ impl AppService {
             .map_err(Into::into)
     }
 
+    /// Retrieves a list of unique dates ("YYYY-MM-DD") within a given month and year
+    /// that have at least one workout recorded. Delegates to db module.
+    /// # Errors
+    /// Returns `anyhow::Error` if the database query fails or month is invalid.
+    pub fn get_workout_dates_for_month(&self, year: i32, month: u32) -> Result<Vec<String>> {
+        // Month validation could also be in db.rs, but can be here too for early exit.
+        if !(1..=12).contains(&month) {
+            bail!("Invalid month: {}. Month must be between 1 and 12.", month);
+        }
+
+        db::get_workout_dates_for_month_db(&self.conn, year, month)
+            .with_context(|| {
+                format!("Failed to get workout dates for {year}-{month:02} from database")
+            })
+            .map_err(Into::into) // Convert db::Error into anyhow::Error
+    }
+
     /// Calculates and returns statistics for an exercise.
     /// # Errors
     /// Returns `anyhow::Error` if identifier invalid or DB query fails.
@@ -1007,28 +1025,75 @@ impl AppService {
         db::get_all_dates_with_exercise(&self.conn)
     }
 
-    /// Fetches and processes workout data for plotting.
+    /// Fetches and processes workout data for plotting, aggregated daily.
+    ///
+    /// Data is filtered by exercise identifier and an optional date range.
+    /// The specific metric (e.g., max weight, total volume) is determined by `graph_type`.
+    /// For `GraphType::WorkoutDistance`, the returned distance values are converted
+    /// to the unit specified in the application configuration (`config.units`).
+    /// All other metrics are returned as recorded or calculated (e.g., E1RM).
+    ///
+    /// # Arguments
+    ///
+    /// * `identifier` - The exercise identifier (name, alias, or ID as string) to fetch data for.
+    /// * `graph_type` - The type of metric to calculate and return for each day.
+    /// * `start_date_filter` - Optional start date (inclusive) for filtering workouts.
+    /// * `end_date_filter` - Optional end date (inclusive) for filtering workouts.
+    ///
     /// # Returns
-    /// A `Vec<(f64, f64)>` where x=days since first workout, y=metric value.
+    ///
+    /// A `Result` containing a `Vec<(NaiveDate, f64)>`.
+    /// Each tuple represents `(date, aggregated_metric_value)`.
+    /// - The `NaiveDate` is the date of the workout(s).
+    /// - The `f64` is the aggregated value for that date based on the `graph_type`.
+    ///   - For `Estimated1RM`, `MaxWeight`, `MaxReps`: the maximum value achieved on that day.
+    ///   - For `WorkoutVolume`, `WorkoutReps`, `WorkoutDuration`, `WorkoutDistance`: the sum of values for that day.
+    ///
+    /// Returns an empty vector if no workouts match the criteria or if all aggregated values are non-positive.
+    ///
     /// # Errors
-    /// Returns `anyhow::Error` if identifier invalid or DB query fails.
+    ///
+    /// Returns `anyhow::Error` if:
+    /// - The `identifier` cannot be resolved to a valid exercise.
+    /// - There's an issue querying the database.
+    /// - The `exercise_definition` for the resolved exercise cannot be found (should be rare if identifier resolves).
     #[allow(clippy::cast_precision_loss, clippy::too_many_lines)]
     pub fn get_data_for_graph(
         &self,
         identifier: &str,
         graph_type: GraphType,
-    ) -> Result<Vec<(f64, f64)>> {
+        start_date_filter: Option<NaiveDate>, // <<< ADDED
+        end_date_filter: Option<NaiveDate>,   // <<< ADDED
+    ) -> Result<Vec<(NaiveDate, f64)>> {
+        // <<< CHANGED RETURN TYPE
         let canonical_name = self
             .resolve_identifier_to_canonical_name(identifier)?
             .ok_or_else(|| DbError::ExerciseNotFound(identifier.to_string()))?;
 
-        let filter = WorkoutFilters {
+        let exercise_definition = db::get_exercise_by_identifier(&self.conn, &canonical_name)?
+            .map(|(def, _)| def)
+            .ok_or_else(|| DbError::ExerciseNotFound(canonical_name.clone()))?;
+
+        // Initial filter for the exercise
+        let base_filter = WorkoutFilters {
             exercise_name: Some(&canonical_name),
             ..Default::default()
         };
-        let history = self
-            .list_workouts(&filter) // Use service list_workouts which returns Result<_, anyhow::Error>
+
+        let mut history = self
+            .list_workouts(&base_filter) // This should return Result<Vec<Workout>, anyhow::Error>
             .context(format!("Failed graph data fetch for '{canonical_name}'"))?;
+
+        // Apply date range filtering
+        if let Some(start_date) = start_date_filter {
+            history.retain(|w| w.timestamp.date_naive() >= start_date);
+        }
+        if let Some(end_date) = end_date_filter {
+            history.retain(|w| w.timestamp.date_naive() <= end_date);
+        }
+        // Ensure history is sorted by timestamp if needed, BTreeMap handles date sorting later.
+        history.sort_by_key(|w| w.timestamp);
+
         if history.is_empty() {
             return Ok(vec![]);
         }
@@ -1037,6 +1102,7 @@ impl AppService {
         for w in history {
             let date = w.timestamp.date_naive();
             let entry = daily_aggregated_data.entry(date).or_insert(0.0);
+
             match graph_type {
                 GraphType::Estimated1RM => {
                     if let (Some(wt), Some(r)) = (w.weight, w.reps) {
@@ -1046,7 +1112,9 @@ impl AppService {
                     }
                 }
                 GraphType::MaxWeight => {
-                    if let Some(wt) = w.weight.filter(|&wg| wg > 0.0) {
+                    let effective_weight =
+                        calculate_effective_weight(&exercise_definition, w.weight, w.bodyweight);
+                    if let Some(wt) = effective_weight.filter(|&wg| wg > 0.0) {
                         *entry = entry.max(wt);
                     }
                 }
@@ -1058,8 +1126,16 @@ impl AppService {
                 GraphType::WorkoutVolume => {
                     let s = w.sets.unwrap_or(1).max(1);
                     let r = w.reps.unwrap_or(0);
-                    let wt = w.weight.unwrap_or(0.0);
-                    let v = s as f64 * r as f64 * wt;
+
+                    let weight_for_volume = match exercise_definition.type_ {
+                        ExerciseType::BodyWeight => {
+                            calculate_effective_weight(&exercise_definition, w.weight, w.bodyweight)
+                                .unwrap_or(0.0)
+                        }
+                        _ => w.weight.unwrap_or(0.0),
+                    };
+
+                    let v = s as f64 * r as f64 * weight_for_volume;
                     if v > 0.0 {
                         *entry += v;
                     }
@@ -1079,33 +1155,29 @@ impl AppService {
                 }
                 GraphType::WorkoutDistance => {
                     if let Some(d) = w.distance.filter(|&dist| dist > 0.0) {
-                        *entry += d;
+                        *entry += d; // Stored as KM
                     }
                 }
             }
         }
 
-        let Some(first_day) = daily_aggregated_data.keys().next() else {
-            return Ok(vec![]);
-        };
-        let first_day_ce = first_day.num_days_from_ce();
-
-        let data_points: Vec<(f64, f64)> = daily_aggregated_data
+        let data_points: Vec<(NaiveDate, f64)> = daily_aggregated_data
             .into_iter()
             .filter_map(|(date, value)| {
                 if value <= 0.0 {
+                    // Filter out non-positive values for plotting
                     return None;
                 }
-                let days = f64::from(date.num_days_from_ce() - first_day_ce);
+
                 let final_val = if graph_type == GraphType::WorkoutDistance {
                     match self.config.units {
-                        Units::Metric => value,
+                        Units::Metric => value, // Already KM
                         Units::Imperial => value * KM_TO_MILE,
                     }
                 } else {
                     value
                 };
-                Some((days, final_val))
+                Some((date, final_val))
             })
             .collect();
 

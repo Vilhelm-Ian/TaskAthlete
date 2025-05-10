@@ -2,6 +2,7 @@
 use anyhow::Result as AnyhowResult; // Use AnyhowResult alias where needed to avoid conflict
 use chrono::{DateTime, NaiveDate, Utc};
 use rusqlite::{named_params, params, Connection, OptionalExtension, Row, ToSql};
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::error::Error as StdError; // Use alias for standard Error trait
 use std::fmt;
@@ -47,7 +48,7 @@ pub enum Error {
     Conversion(String),
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Eq, Clone, Copy)]
 pub enum ExerciseType {
     Resistance,
     Cardio,
@@ -239,7 +240,7 @@ fn map_collect_error(e: rusqlite::Error) -> Error {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Workout {
     pub id: i64,
     pub timestamp: DateTime<Utc>,
@@ -266,7 +267,7 @@ impl Workout {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExerciseDefinition {
     pub id: i64,
     pub name: String,
@@ -418,7 +419,7 @@ pub fn add_workout(conn: &Connection, data: &NewWorkoutData) -> Result<i64, Erro
     let timestamp_str = data.timestamp.to_rfc3339();
     let sets_val = data.sets.unwrap_or(1);
 
-    let result = conn.execute(
+    conn.execute(
         "INSERT INTO workouts (timestamp, exercise_name, sets, reps, weight, duration_minutes, distance, bodyweight, notes)
          VALUES (:ts, :ex_name, :sets, :reps, :weight, :duration, :distance, :bw, :notes)",
 
@@ -1121,7 +1122,7 @@ pub fn list_aliases(conn: &Connection) -> Result<HashMap<String, String>, Error>
         .map_err(Error::QueryFailed)
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ResolvedByType {
     Id,
     Alias,
@@ -1525,4 +1526,42 @@ fn add_log_flag_column_if_not_exists(
         conn.execute(&sql, [])?;
     }
     Ok(())
+}
+
+pub fn get_workout_dates_for_month_db(
+    conn: &Connection,
+    year: i32,
+    month: u32,
+) -> Result<Vec<String>, Error> {
+    // Ensure month is valid (1-12) - good to keep this check close to the query
+    if !(1..=12).contains(&month) {
+        // Using anyhow::bail here if you prefer it for internal validation in db.rs
+        // or return a specific db::Error variant. For consistency with db::Error:
+        return Err(Error::InvalidParameterCount(month as usize, 12)); // Or a more specific error
+    }
+
+    // SQL query for RFC3339 timestamps stored in the 'timestamp' column
+    let mut stmt = conn
+        .prepare(
+            "SELECT DISTINCT strftime('%Y-%m-%d', timestamp) AS workout_day \
+         FROM workouts \
+         WHERE CAST(strftime('%Y', timestamp) AS INTEGER) = ?1 \
+           AND CAST(strftime('%m', timestamp) AS INTEGER) = ?2 \
+         ORDER BY workout_day;",
+        )
+        .map_err(Error::QueryFailed)?;
+
+    let date_iter = stmt
+        .query_map(
+            params![year, month],
+            |row| row.get(0), // Get the 'workout_day' string
+        )
+        .map_err(Error::QueryFailed)?;
+
+    let mut dates = Vec::new();
+    for date_result in date_iter {
+        dates.push(date_result.map_err(Error::QueryFailed)?); // Ensure rusqlite::Error is mapped
+    }
+
+    Ok(dates)
 }

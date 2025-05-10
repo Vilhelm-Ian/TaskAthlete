@@ -4,17 +4,8 @@ use chrono::{DateTime, Duration, NaiveDate, Utc};
 use std::thread;
 use std::time::Duration as StdDuration;
 use task_athlete_lib::{
-    AddWorkoutParams,
-    AppService,
-    Config,
-    ConfigError,
-    DbError,
-    EditWorkoutParams,
-    ExerciseType,
-    GraphType,
-    Units,
-    VolumeFilters,
-    WorkoutFilters,
+    AddWorkoutParams, AppService, Config, ConfigError, DbError, EditWorkoutParams, ExerciseType,
+    GraphType, Units, VolumeFilters, WorkoutFilters,
 };
 
 // Helper function to create a test service with in-memory database
@@ -1751,16 +1742,23 @@ fn get_all_dates_exercised() -> Result<()> {
 
 #[test]
 fn test_graph_data_fetching() -> Result<()> {
-    let mut service = create_test_service()?;
-    let day1 = NaiveDate::from_ymd_opt(2023, 10, 26).unwrap();
-    let naive_datetime = day1.and_hms_opt(0, 0, 0).unwrap();
-    let day1: DateTime<Utc> = DateTime::from_naive_utc_and_offset(naive_datetime, Utc);
-    let day2 = NaiveDate::from_ymd_opt(2023, 10, 27).unwrap();
-    let naive_datetime = day2.and_hms_opt(0, 0, 0).unwrap();
-    let day2: DateTime<Utc> = DateTime::from_naive_utc_and_offset(naive_datetime, Utc);
-    let day3 = NaiveDate::from_ymd_opt(2023, 10, 28).unwrap();
-    let naive_datetime = day3.and_hms_opt(0, 0, 0).unwrap();
-    let day3: DateTime<Utc> = DateTime::from_naive_utc_and_offset(naive_datetime, Utc);
+    // Assuming Result is anyhow::Result or similar
+    let mut service = create_test_service()?; // Assuming this function is available
+
+    // Define NaiveDate for assertions
+    let date_2023_10_26 = NaiveDate::from_ymd_opt(2023, 10, 26).unwrap();
+    let date_2023_10_27 = NaiveDate::from_ymd_opt(2023, 10, 27).unwrap();
+    let date_2023_10_28 = NaiveDate::from_ymd_opt(2023, 10, 28).unwrap();
+
+    // Define DateTime<Utc> for workout entries
+    // Using specific times to ensure AddWorkoutParams.date has a time component.
+    // The NaiveDate part is what matters for aggregation.
+    let dt_2023_10_26: DateTime<Utc> =
+        DateTime::from_naive_utc_and_offset(date_2023_10_26.and_hms_opt(9, 0, 0).unwrap(), Utc);
+    let dt_2023_10_27: DateTime<Utc> =
+        DateTime::from_naive_utc_and_offset(date_2023_10_27.and_hms_opt(10, 0, 0).unwrap(), Utc);
+    let dt_2023_10_28: DateTime<Utc> =
+        DateTime::from_naive_utc_and_offset(date_2023_10_28.and_hms_opt(11, 0, 0).unwrap(), Utc);
 
     service.create_exercise("Bench Press", ExerciseType::Resistance, None, Some("chest"))?;
     service.create_exercise("Running", ExerciseType::Cardio, None, Some("legs"))?;
@@ -1768,121 +1766,161 @@ fn test_graph_data_fetching() -> Result<()> {
     // Helper
     let mut add_workout = |params: AddWorkoutParams| -> Result<()> {
         service.add_workout(params)?;
-        thread::sleep(StdDuration::from_millis(5)); // Ensure unique timestamp
+        thread::sleep(StdDuration::from_millis(5)); // Ensure unique timestamp if processing relies on it
         Ok(())
     };
 
     // Bench Press data
     add_workout(AddWorkoutParams {
         exercise_identifier: "Bench Press",
-        date: day1,
+        date: dt_2023_10_26, // Use DateTime<Utc>
         sets: Some(3),
         reps: Some(10),
         weight: Some(100.0),
         ..Default::default()
-    })?; // E1RM ~133.3, Vol=3000, Reps=30
+    })?;
     add_workout(AddWorkoutParams {
         exercise_identifier: "Bench Press",
-        date: day2,
+        date: dt_2023_10_27, // Use DateTime<Utc>
         sets: Some(4),
         reps: Some(8),
         weight: Some(105.0),
         ..Default::default()
-    })?; // E1RM ~133.0, Vol=3360, Reps=32
+    })?;
     add_workout(AddWorkoutParams {
         exercise_identifier: "Bench Press",
-        date: day2,
+        date: dt_2023_10_27, // Use DateTime<Utc>
         sets: Some(1),
         reps: Some(6),
         weight: Some(110.0),
         ..Default::default()
-    })?; // E1RM ~132.0, Vol=660, Reps=6 -> Max E1RM day2 = 133.0, Max W=110, Max R=8, Vol=4020, TReps=38
+    })?;
     add_workout(AddWorkoutParams {
         exercise_identifier: "Bench Press",
-        date: day3,
+        date: dt_2023_10_28, // Use DateTime<Utc>
         sets: Some(2),
         reps: Some(5),
         weight: Some(110.0),
         ..Default::default()
-    })?; // E1RM ~128.3, Vol=1100, Reps=10
+    })?;
 
     // Running data
     add_workout(AddWorkoutParams {
         exercise_identifier: "Running",
-        date: day2,
+        date: dt_2023_10_27, // Use DateTime<Utc>
         duration: Some(30),
         distance: Some(5.0),
         ..Default::default()
     })?;
     add_workout(AddWorkoutParams {
         exercise_identifier: "Running",
-        date: day2,
+        date: dt_2023_10_27, // Use DateTime<Utc>
         duration: Some(10),
         distance: Some(2.0),
         ..Default::default()
-    })?; // Sum Day2: Dur=40, Dist=7.0
+    })?;
     add_workout(AddWorkoutParams {
         exercise_identifier: "Running",
-        date: day3,
+        date: dt_2023_10_28, // Use DateTime<Utc>
         duration: Some(35),
         distance: Some(5.5),
         ..Default::default()
     })?;
 
     // Test E1RM
-    let e1rm_data = service.get_data_for_graph("Bench Press", GraphType::Estimated1RM)?;
+    let e1rm_data =
+        service.get_data_for_graph("Bench Press", GraphType::Estimated1RM, None, None)?; // Added None, None
     assert_eq!(
         e1rm_data,
         vec![
-            (0.0, 133.33333333333331),
-            (1.0, 133.0),
-            (2.0, 128.33333333333334)
+            (date_2023_10_26, 133.33333333333331), // Use NaiveDate
+            (date_2023_10_27, 133.0),              // Use NaiveDate
+            (date_2023_10_28, 128.33333333333334)  // Use NaiveDate
         ]
     );
 
     // Test Max Weight
-    let weight_data = service.get_data_for_graph("Bench Press", GraphType::MaxWeight)?;
-    assert_eq!(weight_data, vec![(0.0, 100.0), (1.0, 110.0), (2.0, 110.0)]);
+    let weight_data =
+        service.get_data_for_graph("Bench Press", GraphType::MaxWeight, None, None)?; // Added None, None
+    assert_eq!(
+        weight_data,
+        vec![
+            (date_2023_10_26, 100.0), // Use NaiveDate
+            (date_2023_10_27, 110.0), // Use NaiveDate
+            (date_2023_10_28, 110.0)  // Use NaiveDate
+        ]
+    );
 
     // Test Max Reps
-    let reps_data = service.get_data_for_graph("Bench Press", GraphType::MaxReps)?;
-    assert_eq!(reps_data, vec![(0.0, 10.0), (1.0, 8.0), (2.0, 5.0)]);
+    let reps_data = service.get_data_for_graph("Bench Press", GraphType::MaxReps, None, None)?; // Added None, None
+    assert_eq!(
+        reps_data,
+        vec![
+            (date_2023_10_26, 10.0), // Use NaiveDate
+            (date_2023_10_27, 8.0),  // Use NaiveDate
+            (date_2023_10_28, 5.0)   // Use NaiveDate
+        ]
+    );
 
     // Test Workout Volume
-    let volume_data = service.get_data_for_graph("Bench Press", GraphType::WorkoutVolume)?;
+    let volume_data =
+        service.get_data_for_graph("Bench Press", GraphType::WorkoutVolume, None, None)?; // Added None, None
     assert_eq!(
         volume_data,
-        vec![(0.0, 3000.0), (1.0, 4020.0), (2.0, 1100.0)]
+        vec![
+            (date_2023_10_26, 3000.0), // Use NaiveDate
+            (date_2023_10_27, 4020.0), // Use NaiveDate
+            (date_2023_10_28, 1100.0)  // Use NaiveDate
+        ]
     );
 
     // Test Workout Reps (Total reps)
-    let workout_reps_data = service.get_data_for_graph("Bench Press", GraphType::WorkoutReps)?;
+    let workout_reps_data =
+        service.get_data_for_graph("Bench Press", GraphType::WorkoutReps, None, None)?; // Added None, None
     assert_eq!(
         workout_reps_data,
-        vec![(0.0, 30.0), (1.0, 38.0), (2.0, 10.0)]
+        vec![
+            (date_2023_10_26, 30.0), // Use NaiveDate
+            (date_2023_10_27, 38.0), // Use NaiveDate
+            (date_2023_10_28, 10.0)  // Use NaiveDate
+        ]
     );
 
     // Test Workout Duration (Running - Summed)
-    let duration_data = service.get_data_for_graph("Running", GraphType::WorkoutDuration)?;
-    assert_eq!(duration_data, vec![(0.0, 40.0), (1.0, 35.0)]); // Day 2 is first day relative to Running = 0.0
+    let duration_data =
+        service.get_data_for_graph("Running", GraphType::WorkoutDuration, None, None)?; // Added None, None
+    assert_eq!(
+        duration_data,
+        vec![
+            (date_2023_10_27, 40.0), // Running data starts on 27th
+            (date_2023_10_28, 35.0)
+        ]
+    );
 
     // Test Workout Distance (Running - Metric - Summed)
-    let distance_data_metric = service.get_data_for_graph("Running", GraphType::WorkoutDistance)?;
-    assert_eq!(distance_data_metric, vec![(0.0, 7.0), (1.0, 5.5)]); // km
+    let distance_data_metric =
+        service.get_data_for_graph("Running", GraphType::WorkoutDistance, None, None)?; // Added None, None
+    assert_eq!(
+        distance_data_metric,
+        vec![
+            (date_2023_10_27, 7.0), // Running data starts on 27th
+            (date_2023_10_28, 5.5)
+        ]
+    );
 
     // Test Workout Distance (Running - Imperial - Summed)
-    service.config.units = Units::Imperial;
+    service.config.units = Units::Imperial; // Assuming Units enum is available
     let distance_data_imperial =
-        service.get_data_for_graph("Running", GraphType::WorkoutDistance)?;
+        service.get_data_for_graph("Running", GraphType::WorkoutDistance, None, None)?; // Added None, None
     assert_eq!(distance_data_imperial.len(), 2);
-    assert_eq!(distance_data_imperial[0].0, 0.0);
+    assert_eq!(distance_data_imperial[0].0, date_2023_10_27); // Compare with NaiveDate
     assert!((distance_data_imperial[0].1 - (7.0 * 0.621_371)).abs() < 0.01); // miles
-    assert_eq!(distance_data_imperial[1].0, 1.0);
+    assert_eq!(distance_data_imperial[1].0, date_2023_10_28); // Compare with NaiveDate
     assert!((distance_data_imperial[1].1 - (5.5 * 0.621_371)).abs() < 0.01); // miles
 
     // Test for exercise with no data
     service.create_exercise("Untouched", ExerciseType::Resistance, None, None)?;
-    let no_data = service.get_data_for_graph("Untouched", GraphType::MaxWeight)?;
+    let no_data = service.get_data_for_graph("Untouched", GraphType::MaxWeight, None, None)?; // Added None, None
     assert!(no_data.is_empty());
 
     Ok(())
@@ -2086,6 +2124,108 @@ fn test_log_flag_restrictions() -> Result<()> {
     let err_msg_curl = disallowed_curl_duration_result.unwrap_err().to_string();
     assert!(err_msg_curl
         .contains("Exercise 'Bicep Curl' is not configured to log the following: duration"));
+
+    Ok(())
+}
+
+#[test]
+fn test_get_workout_dates_for_month() -> Result<()> {
+    let mut service = create_test_service()?;
+    service.create_exercise("Test Exercise", ExerciseType::Resistance, None, None)?;
+
+    // Helper to add a workout on a specific date
+    let mut add_workout_on_date_str = |date_str: &str| -> Result<()> {
+        let naive_date = NaiveDate::parse_from_str(date_str, "%Y-%m-%d")?;
+        let naive_datetime = naive_date.and_hms_opt(12, 0, 0).unwrap(); // Noon
+        let timestamp: DateTime<Utc> = DateTime::from_naive_utc_and_offset(naive_datetime, Utc);
+
+        service.add_workout(AddWorkoutParams {
+            exercise_identifier: "Test Exercise",
+            date: timestamp,
+            sets: Some(1),
+            reps: Some(1),
+            weight: Some(10.0),
+            ..Default::default()
+        })?;
+        // Add a small delay to ensure timestamps are unique if adding multiple on same conceptual day
+        // but for this test, we are testing distinct dates.
+        thread::sleep(StdDuration::from_millis(5));
+        Ok(())
+    };
+
+    // --- Add workouts for specific months ---
+    // October 2023
+    add_workout_on_date_str("2023-10-01")?;
+    add_workout_on_date_str("2023-10-15")?;
+    add_workout_on_date_str("2023-10-15")?; // Add another on same day, should still be one entry for the date
+    add_workout_on_date_str("2023-10-31")?;
+
+    // November 2023
+    add_workout_on_date_str("2023-11-05")?;
+    add_workout_on_date_str("2023-11-20")?;
+
+    // December 2023 (no workouts)
+
+    // January 2024
+    add_workout_on_date_str("2024-01-10")?;
+
+    // --- Test cases ---
+
+    // 1. Month with workouts (October 2023)
+    let oct_dates = service.get_workout_dates_for_month(2023, 10)?;
+    assert_eq!(
+        oct_dates.len(),
+        3,
+        "October should have 3 unique workout dates"
+    );
+    assert_eq!(oct_dates, vec!["2023-10-01", "2023-10-15", "2023-10-31"]); // Expect sorted
+
+    // 2. Month with workouts (November 2023)
+    let nov_dates = service.get_workout_dates_for_month(2023, 11)?;
+    assert_eq!(
+        nov_dates.len(),
+        2,
+        "November should have 2 unique workout dates"
+    );
+    assert_eq!(nov_dates, vec!["2023-11-05", "2023-11-20"]);
+
+    // 3. Month with no workouts (December 2023)
+    let dec_dates = service.get_workout_dates_for_month(2023, 12)?;
+    assert!(
+        dec_dates.is_empty(),
+        "December should have no workout dates"
+    );
+
+    // 4. Month in a different year (January 2024)
+    let jan_2024_dates = service.get_workout_dates_for_month(2024, 1)?;
+    assert_eq!(
+        jan_2024_dates.len(),
+        1,
+        "January 2024 should have 1 workout date"
+    );
+    assert_eq!(jan_2024_dates, vec!["2024-01-10"]);
+
+    // 5. Test invalid month (e.g., month 0 or 13)
+    let invalid_month_low = service.get_workout_dates_for_month(2023, 0);
+    assert!(invalid_month_low.is_err(), "Month 0 should be an error");
+    assert!(invalid_month_low
+        .unwrap_err()
+        .to_string()
+        .contains("Invalid month"));
+
+    let invalid_month_high = service.get_workout_dates_for_month(2023, 13);
+    assert!(invalid_month_high.is_err(), "Month 13 should be an error");
+    assert!(invalid_month_high
+        .unwrap_err()
+        .to_string()
+        .contains("Invalid month"));
+
+    // 6. Month with no workouts in a year that has other workouts
+    let feb_2024_dates = service.get_workout_dates_for_month(2024, 2)?;
+    assert!(
+        feb_2024_dates.is_empty(),
+        "February 2024 should have no workout dates"
+    );
 
     Ok(())
 }

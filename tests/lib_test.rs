@@ -568,13 +568,20 @@ fn test_create_and_list_exercises() -> Result<()> {
     assert_eq!(resistance_exercises[0].name, "Bench Press");
 
     // Filter by muscle
-    let leg_exercises = service.list_exercises(None, Some("legs"))?;
+    let leg_exercises = service.list_exercises(None, Some(vec!["legs"]))?;
     assert_eq!(leg_exercises.len(), 1); // Running
     assert_eq!(leg_exercises[0].name, "Running");
 
-    let back_exercises = service.list_exercises(None, Some("back"))?;
+    let back_exercises = service.list_exercises(None, Some(vec!["back"]))?;
     assert_eq!(back_exercises.len(), 1); // Pull-ups
     assert_eq!(back_exercises[0].name, "Pull-ups");
+
+    let back_biceps_exercises = service.list_exercises(None, Some(vec!["back", "biceps"]))?;
+    assert_eq!(back_biceps_exercises.len(), 1); // Pull-ups
+    assert_eq!(back_biceps_exercises[0].name, "Pull-ups");
+
+    let back_abs_exercises = service.list_exercises(None, Some(vec!["back", "abs"]))?;
+    assert_eq!(back_abs_exercises.len(), 0); // Pull-ups
 
     Ok(())
 }

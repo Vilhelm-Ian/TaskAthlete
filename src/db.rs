@@ -1176,7 +1176,7 @@ pub fn get_exercise_by_identifier(
 pub fn list_exercises(
     conn: &Connection,
     type_filter: Option<ExerciseType>,
-    muscle_filter: Option<&str>,
+    muscle_filter: Option<Vec<&str>>,
 ) -> Result<Vec<ExerciseDefinition>, Error> {
     let mut sql = "SELECT id, name, type, muscles, log_weight, log_reps, log_duration, log_distance
                    FROM exercises WHERE 1=1"
@@ -1187,10 +1187,18 @@ pub fn list_exercises(
         sql.push_str(" AND type = :type");
         params_map.insert(":type".into(), Box::new(t.to_string()));
     }
-    if let Some(m) = muscle_filter {
-        sql.push_str(" AND muscles LIKE :muscle");
-        params_map.insert(":muscle".into(), Box::new(format!("%{m}%")));
+
+    if let Some(muscles) = muscle_filter {
+        if !muscles.is_empty() {
+            // Add a condition for each muscle in the vector
+            for (i, muscle) in muscles.iter().enumerate() {
+                let param_name = format!(":muscle{}", i);
+                sql.push_str(&format!(" AND muscles LIKE {}", param_name));
+                params_map.insert(param_name, Box::new(format!("%{}%", muscle)));
+            }
+        }
     }
+
     sql.push_str(" ORDER BY name ASC");
 
     let params_for_query: Vec<(&str, &dyn ToSql)> = params_map

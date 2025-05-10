@@ -514,7 +514,7 @@ impl AppService {
     pub fn list_exercises(
         &self,
         type_filter: Option<ExerciseType>,
-        muscle_filter: Option<&str>,
+        muscle_filter: Option<Vec<&str>>,
     ) -> Result<Vec<ExerciseDefinition>> {
         db::list_exercises(&self.conn, type_filter, muscle_filter)
             .context("Failed to list exercise definitions")

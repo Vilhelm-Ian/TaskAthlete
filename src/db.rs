@@ -287,6 +287,13 @@ const DB_FILE_NAME: &str = "workouts.sqlite";
 /// - `Error::DataDir`: If the application data directory cannot be determined.
 /// - `Error::Io`: If there's an error creating the application directory.
 pub fn get_db_path() -> Result<PathBuf, Error> {
+    #[cfg(target_os = "android")]
+    {
+        // On Android, just return the current directory joined with the config file name
+    let path = PathBuf::from("/data/data/com.task_athlete_gui.app/files").join(DB_FILE_NAME);
+    return Ok(path);
+    }
+    
     let data_dir = dirs::data_dir().ok_or(Error::DataDir)?;
     let app_dir = data_dir.join("workout-tracker-cli");
     if !app_dir.exists() {

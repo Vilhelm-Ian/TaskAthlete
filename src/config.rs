@@ -213,6 +213,12 @@ impl Default for Config {
 /// - `ConfigError::Io`: If there's an I/O error creating the configuration directory.
 pub fn get_config_path() -> Result<PathBuf, ConfigError> {
     let config_dir_override = std::env::var(CONFIG_ENV_VAR).ok();
+    #[cfg(target_os = "android")]
+    {
+        // On Android, just return the current directory joined with the config file name
+        let path = PathBuf::from("/data/data/com.task_athlete_gui.app/files").join(DB_FILE_NAME);
+        return Ok(path);
+    }
 
     let config_dir_path = if let Some(path_str) = config_dir_override {
         let path = PathBuf::from(path_str);
@@ -235,8 +241,6 @@ pub fn get_config_path() -> Result<PathBuf, ConfigError> {
 
     Ok(config_dir_path.join(CONFIG_FILE_NAME))
 }
-
-
 
 /// Loads the configuration from the TOML file at the given path.
 ///

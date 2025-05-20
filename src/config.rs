@@ -236,6 +236,8 @@ pub fn get_config_path() -> Result<PathBuf, ConfigError> {
     Ok(config_dir_path.join(CONFIG_FILE_NAME))
 }
 
+
+
 /// Loads the configuration from the TOML file at the given path.
 ///
 /// If the file doesn't exist, it creates a default configuration file and returns the default config.

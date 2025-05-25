@@ -1,4 +1,3 @@
-// src/config.rs
 use anyhow::Result;
 use comfy_table::Color;
 use serde::{Deserialize, Serialize};
@@ -216,7 +215,8 @@ pub fn get_config_path() -> Result<PathBuf, ConfigError> {
     #[cfg(target_os = "android")]
     {
         // On Android, just return the current directory joined with the config file name
-        let path = PathBuf::from("/data/data/com.task_athlete_gui.app/files").join(DB_FILE_NAME);
+        let path =
+            PathBuf::from("/data/data/com.task_athlete_gui.app/files").join(CONFIG_FILE_NAME); // Corrected: Use CONFIG_FILE_NAME
         return Ok(path);
     }
 

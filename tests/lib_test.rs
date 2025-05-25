@@ -1163,8 +1163,10 @@ fn test_workout_not_found() -> Result<()> {
     // Try to edit non-existent workout
     let result = service.edit_workout(EditWorkoutParams {
         id: 999,
+        new_sets: Some(30),
         ..Default::default()
     });
+    println!("{:?}", result);
     assert!(result.is_err());
     // assert!(matches!(
     //     result.unwrap_err().downcast_ref::<DbError>(),

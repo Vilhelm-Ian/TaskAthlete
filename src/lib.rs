@@ -1,4 +1,3 @@
-// src/lib.rs
 use anyhow::{bail, Context, Result};
 // Use anyhow::Result as standard Result for service layer
 use chrono::{DateTime, Datelike, Duration, NaiveDate, TimeZone, Utc};
@@ -475,23 +474,25 @@ impl AppService {
             let workout_count: i64 = self
                 .conn
                 .query_row(
-                    "SELECT COUNT(*) FROM workouts WHERE exercise_name = ?1 COLLATE NOCASE",
+                    "SELECT COUNT(*) FROM workouts WHERE exercise_name = ?1 COLLATE NOCASE AND deleted = FALSE", // Only count active workouts
                     [&canonical_name],
                     |row| row.get(0),
                 )
                 .with_context(|| format!("Failed workout count check for '{canonical_name}'"))?;
 
             if workout_count > 0 {
-                eprintln!("Warning: Deleting '{canonical_name}'. {workout_count} associated workout(s) remain.");
+                // This warning now pertains to *active* workouts. Soft-deleted workouts associated with this exercise will remain soft-deleted.
+                eprintln!("Warning: Soft-deleting '{canonical_name}'. {workout_count} active associated workout(s) will remain (but will effectively be orphaned if not also deleted or reassigned). Consider deleting or reassigning them.");
             }
 
             let deleted_count =
                 db::delete_exercise(&mut self.conn, &canonical_name).map_err(|e| match e {
                     DbError::ExerciseNotFound(_) => {
-                        anyhow::anyhow!("Exercise '{identifier}' vanished before deletion.")
+                        // This means it was already deleted or never existed in an active state.
+                        anyhow::anyhow!("Exercise '{identifier}' not found or already deleted.")
                     }
                     _ => anyhow::Error::new(e)
-                        .context(format!("Failed to delete exercise '{canonical_name}'")),
+                        .context(format!("Failed to soft-delete exercise '{canonical_name}'")),
                 })?;
             total_deleted += deleted_count;
         }
@@ -529,6 +530,7 @@ impl AppService {
         if trimmed_alias.is_empty() {
             bail!("Alias name cannot be empty.");
         }
+        // Check against active exercises/aliases
         if let Some((_, res_type)) = db::get_exercise_by_identifier(&self.conn, trimmed_alias)? {
             match res_type {
                 ResolvedByType::Id => {
@@ -537,7 +539,7 @@ impl AppService {
                 ResolvedByType::Name => {
                     bail!("Alias '{trimmed_alias}' conflicts with an existing exercise name.")
                 }
-                ResolvedByType::Alias => {}
+                ResolvedByType::Alias => {} // If it's an alias for something else, create_alias in db will fail if name taken
             }
         }
         let canonical_name = self
@@ -546,7 +548,7 @@ impl AppService {
 
         db::create_alias(&self.conn, trimmed_alias, &canonical_name).map_err(
             |db_err| match db_err {
-                DbError::AliasAlreadyExists(_) => anyhow::anyhow!(db_err),
+                DbError::AliasAlreadyExists(_) => anyhow::anyhow!(db_err), // Will trigger if alias name (PK) is taken, even if soft-deleted
                 _ => anyhow::Error::new(db_err)
                     .context(format!("Failed to create alias '{trimmed_alias}'")),
             },
@@ -562,9 +564,9 @@ impl AppService {
             bail!("Alias name cannot be empty.");
         }
         db::delete_alias(&self.conn, trimmed_alias).map_err(|db_err| match db_err {
-            DbError::AliasNotFound(_) => anyhow::anyhow!(db_err),
+            DbError::AliasNotFound(_) => anyhow::anyhow!(db_err), // Not found or already deleted
             _ => anyhow::Error::new(db_err)
-                .context(format!("Failed to delete alias '{trimmed_alias}'")),
+                .context(format!("Failed to soft-delete alias '{trimmed_alias}'")),
         })
     }
 
@@ -591,7 +593,6 @@ impl AppService {
         )?;
         let canonical_exercise_name = &exercise_def.name;
 
-        // --- Check for violations of log flags ---
         let mut violations = vec![];
 
         if !exercise_def.log_weight && params.weight.is_some() {
@@ -600,7 +601,6 @@ impl AppService {
         if !exercise_def.log_reps && params.reps.is_some() {
             violations.push("reps");
         }
-        // Note: Duration/Distance checks should use the input params, not the converted ones
         if !exercise_def.log_duration && params.duration.is_some() {
             violations.push("duration");
         }
@@ -610,32 +610,23 @@ impl AppService {
 
         if !violations.is_empty() {
             let violation_msg = violations.join(", ");
-            // Use `bail!` for early return with a specific error message
             bail!(
                 "Exercise '{}' is not configured to log the following: {}. Use 'edit exercise {}' to change its logging settings.",
                 canonical_exercise_name,
                 violation_msg,
-                canonical_exercise_name // Suggest how to fix it
+                canonical_exercise_name 
             );
         }
-        // ----------------------------------------
-
-        // --- Bodyweight check for BodyWeight exercises (remains, as this is a separate requirement) ---
-        // If it's a BodyWeight exercise, bodyweight_to_use MUST be provided (by the caller, e.g., main).
-        // This check happens AFTER log flag violations, as you might provide e.g., weight (which is disallowed for BW)
-        // AND forget bodyweight. We report the log flag violation first.
+        
         if exercise_def.type_ == ExerciseType::BodyWeight && params.bodyweight_to_use.is_none() {
             bail!(
                  "Bodyweight log required for BodyWeight exercise '{}'. Use 'log-bw <weight>' or ensure a recent log exists and is passed to the command.",
                  canonical_exercise_name
              );
         }
-        // -------------------------------------------------------------------------------------------
-
-        // Prepare data for DB insertion
-        // weight and bodyweight_to_use are stored separately in the DB
+        
         let additional_weight_for_db = params.weight;
-        let bodyweight_for_db = params.bodyweight_to_use; // Already checked if needed for BW type
+        let bodyweight_for_db = params.bodyweight_to_use; 
 
         let timestamp = params.date;
         let previous_bests = self.get_previous_bests(canonical_exercise_name)?;
@@ -644,31 +635,28 @@ impl AppService {
             exercise_name: canonical_exercise_name,
             timestamp,
             sets: params.sets,
-            weight: additional_weight_for_db, // Store additional weight
-            bodyweight_to_use: bodyweight_for_db, // Store bodyweight at time of workout
+            weight: additional_weight_for_db, 
+            bodyweight_to_use: bodyweight_for_db, 
             reps: params.reps,
             duration: params.duration,
-            distance: self.convert_distance_input_to_km(params.distance), // Always store distance as KM
+            distance: self.convert_distance_input_to_km(params.distance), 
             notes: params.notes.as_deref(),
         };
 
         let inserted_id = self.insert_workout_record(&workout_data)?;
-
-        // Calculate effective weight for the PB check.
-        // Use the values that were provided (and stored if allowed/needed).
+        
         let effective_weight_for_pb_check = calculate_effective_weight(
             &exercise_def,
-            additional_weight_for_db, // Use the additional weight provided
-            bodyweight_for_db,        // Use the bodyweight provided
+            additional_weight_for_db, 
+            bodyweight_for_db,        
         );
 
-        // Pass distance to PB check AFTER converting to KM (as stored in DB and fetched by get_max_distance_for_exercise)
         let pb_info = self.check_for_new_pbs(
             &previous_bests,
             effective_weight_for_pb_check,
             params.reps,
             params.duration,
-            self.convert_distance_input_to_km(params.distance), // Use converted distance for PB check
+            self.convert_distance_input_to_km(params.distance), 
         );
 
         Ok((inserted_id, pb_info))
@@ -680,25 +668,28 @@ impl AppService {
         imp_type: Option<ExerciseType>,
         imp_muscles: Option<String>,
     ) -> Result<ExerciseDefinition> {
-        if let Some(def) = self.resolve_exercise_identifier(identifier)? {
+        if let Some(def) = self.resolve_exercise_identifier(identifier)? { // resolve_exercise_identifier only gets active
             Ok(def)
         } else if let (Some(ex_type), Some(muscles)) = (imp_type, imp_muscles) {
+            // At this point, exercise is not active. It might be soft-deleted or not exist.
+            // db::create_exercise will fail if the name is taken by a soft-deleted exercise due to UNIQUE constraint.
             println!("Exercise '{identifier}' not found, defining implicitly...");
             let muscles_opt = if muscles.trim().is_empty() {
                 None
             } else {
                 Some(muscles.as_str())
             };
-            // Pass None for log_flags to use defaults
             match self.create_exercise(identifier, ex_type, None, muscles_opt) {
                 Ok(id) => {
                     println!("Implicitly defined '{identifier}' (ID: {id})");
-                    self.resolve_exercise_identifier(identifier)?
+                    self.resolve_exercise_identifier(identifier)? // Re-fetch the now active exercise
                         .ok_or_else(|| {
                             anyhow::anyhow!("Failed to re-fetch implicitly created '{identifier}'")
                         })
                 }
-                Err(e) => Err(e).context(format!("Implicit definition failed for '{identifier}'")),
+                Err(e) => { // Could be DbError::ExerciseNameNotUnique if name taken by soft-deleted
+                    Err(e).context(format!("Implicit definition failed for '{identifier}' (name might be taken by a soft-deleted exercise)"))
+                }
             }
         } else {
             bail!(
@@ -788,15 +779,13 @@ impl AppService {
     /// # Errors
     /// Returns `anyhow::Error` if identifier/id invalid or DB update fails.
     pub fn edit_workout(&self, params: EditWorkoutParams) -> Result<u64> {
-        // Changed return type
-        // Fix: Map error from resolve_identifier_to_canonical_name
         let new_canonical_name = params
             .new_exercise_identifier
             .map(|ident| -> Result<String> {
-                self.resolve_identifier_to_canonical_name(&ident)?
-                    .ok_or_else(|| DbError::ExerciseNotFound(ident).into()) // Convert DbError to anyhow::Error
+                self.resolve_identifier_to_canonical_name(&ident)? // Resolves active exercise
+                    .ok_or_else(|| DbError::ExerciseNotFound(ident).into()) 
             })
-            .transpose()?; // Option<Result<String, anyhow::Error>> -> Result<Option<String>, anyhow::Error>
+            .transpose()?; 
 
         let new_timestamp = params
             .new_date
@@ -815,7 +804,7 @@ impl AppService {
             notes: params.new_notes,
             timestamp: Utc::now(),
             exercise_name: String::new(),
-            exercise_type: None, // Dummy values
+            exercise_type: None, 
         };
 
         db::update_workout(
@@ -825,7 +814,7 @@ impl AppService {
             new_timestamp,
         )
         .with_context(|| format!("Failed to update workout ID {}", params.id))
-        .map_err(Into::into) // Convert DbError to anyhow::Error
+        .map_err(Into::into) 
     }
 
     /// Deletes workout entries by IDs.
@@ -835,9 +824,9 @@ impl AppService {
         let mut deleted_ids = Vec::with_capacity(ids.len());
         for &id in ids {
             db::delete_workout(&self.conn, id).map_err(|db_err| match db_err {
-                DbError::WorkoutNotFound(_) => anyhow::anyhow!(db_err),
+                DbError::WorkoutNotFound(_) => anyhow::anyhow!(db_err), // Not found or already deleted
                 _ => {
-                    anyhow::Error::new(db_err).context(format!("Failed to delete workout ID {id}"))
+                    anyhow::Error::new(db_err).context(format!("Failed to soft-delete workout ID {id}"))
                 }
             })?;
             deleted_ids.push(id);
@@ -849,20 +838,18 @@ impl AppService {
     /// # Errors
     /// Returns `anyhow::Error` if identifier invalid or DB list fails.
     pub fn list_workouts(&self, filters: &WorkoutFilters) -> Result<Vec<Workout>> {
-        // Changed return type
-        // Fix: Map error from resolve_identifier_to_canonical_name
         let canonical_exercise_name = filters
             .exercise_name
             .map(|ident| -> Result<String> {
-                self.resolve_identifier_to_canonical_name(ident)?
+                self.resolve_identifier_to_canonical_name(ident)? // Resolves active exercise
                     .ok_or_else(|| {
                         eprintln!(
-                            "Warning: Exercise identifier '{ident}' not found for filtering."
+                            "Warning: Exercise identifier '{ident}' not found (or is soft-deleted) for filtering."
                         );
-                        DbError::ExerciseNotFound(ident.to_string()).into() // Convert DbError to anyhow::Error
+                        DbError::ExerciseNotFound(ident.to_string()).into() 
                     })
             })
-            .transpose()?; // Option<Result<String, anyhow::Error>> -> Result<Option<String>, anyhow::Error>
+            .transpose()?; 
 
         let resolved_filters = WorkoutFilters {
             exercise_name: canonical_exercise_name.as_deref(),
@@ -874,7 +861,7 @@ impl AppService {
 
         db::list_workouts_filtered(&self.conn, &resolved_filters)
             .context("Failed to list workouts")
-            .map_err(Into::into) // Convert DbError to anyhow::Error
+            .map_err(Into::into) 
     }
 
     /// Lists workouts for the Nth most recent day an exercise was performed.
@@ -888,7 +875,7 @@ impl AppService {
         n: u32,
     ) -> Result<Vec<Workout>> {
         let canonical_name = self
-            .resolve_identifier_to_canonical_name(identifier)?
+            .resolve_identifier_to_canonical_name(identifier)? // Resolves active exercise
             .ok_or_else(|| DbError::ExerciseNotFound(identifier.to_string()))?;
         db::list_workouts_for_exercise_on_nth_last_day(&self.conn, &canonical_name, n)
             .with_context(|| format!("Failed nth day lookup for '{canonical_name}' (n={n})"))
@@ -900,7 +887,6 @@ impl AppService {
     /// # Errors
     /// Returns `anyhow::Error` if the database query fails or month is invalid.
     pub fn get_workout_dates_for_month(&self, year: i32, month: u32) -> Result<Vec<String>> {
-        // Month validation could also be in db.rs, but can be here too for early exit.
         if !(1..=12).contains(&month) {
             bail!("Invalid month: {}. Month must be between 1 and 12.", month);
         }
@@ -909,7 +895,7 @@ impl AppService {
             .with_context(|| {
                 format!("Failed to get workout dates for {year}-{month:02} from database")
             })
-            .map_err(Into::into) // Convert db::Error into anyhow::Error
+            .map_err(Into::into) 
     }
 
     /// Calculates and returns statistics for an exercise.
@@ -924,7 +910,7 @@ impl AppService {
     )]
     pub fn get_exercise_stats(&self, identifier: &str) -> Result<ExerciseStats> {
         let canonical_name = self
-            .resolve_identifier_to_canonical_name(identifier)?
+            .resolve_identifier_to_canonical_name(identifier)? // Resolves active exercise
             .ok_or_else(|| DbError::ExerciseNotFound(identifier.to_string()))?;
         let timestamps = db::get_workout_timestamps_for_exercise(&self.conn, &canonical_name)
             .context(format!("Failed history retrieval for '{canonical_name}'"))?;
@@ -989,20 +975,18 @@ impl AppService {
         &self,
         filters: &VolumeFilters,
     ) -> Result<Vec<(NaiveDate, String, f64)>> {
-        // Changed return type
-        // Fix: Map error from resolve_identifier_to_canonical_name
         let canonical_exercise_name = filters
             .exercise_name
             .map(|ident| -> Result<String> {
-                self.resolve_identifier_to_canonical_name(ident)?
+                self.resolve_identifier_to_canonical_name(ident)? // Resolves active exercise
                     .ok_or_else(|| {
                         eprintln!(
-                            "Warning: Exercise identifier '{ident}' not found for volume filter."
+                            "Warning: Exercise identifier '{ident}' not found (or is soft-deleted) for volume filter."
                         );
-                        DbError::ExerciseNotFound(ident.to_string()).into() // Convert DbError to anyhow::Error
+                        DbError::ExerciseNotFound(ident.to_string()).into() 
                     })
             })
-            .transpose()?; // Option<Result<String, anyhow::Error>> -> Result<Option<String>, anyhow::Error>
+            .transpose()?; 
 
         let resolved_filters = VolumeFilters {
             exercise_name: canonical_exercise_name.as_deref(),
@@ -1015,7 +999,7 @@ impl AppService {
 
         db::calculate_daily_volume_filtered(&self.conn, &resolved_filters)
             .context("Failed to calculate workout volume")
-            .map_err(Into::into) // Convert DbError to anyhow::Error
+            .map_err(Into::into) 
     }
 
     /// Gets a list of all unique dates with recorded workouts.
@@ -1062,36 +1046,34 @@ impl AppService {
         &self,
         identifier: &str,
         graph_type: GraphType,
-        start_date_filter: Option<NaiveDate>, // <<< ADDED
-        end_date_filter: Option<NaiveDate>,   // <<< ADDED
+        start_date_filter: Option<NaiveDate>, 
+        end_date_filter: Option<NaiveDate>,   
     ) -> Result<Vec<(NaiveDate, f64)>> {
-        // <<< CHANGED RETURN TYPE
         let canonical_name = self
-            .resolve_identifier_to_canonical_name(identifier)?
+            .resolve_identifier_to_canonical_name(identifier)? // Resolves active exercise
             .ok_or_else(|| DbError::ExerciseNotFound(identifier.to_string()))?;
 
+        // Fetches active exercise definition
         let exercise_definition = db::get_exercise_by_identifier(&self.conn, &canonical_name)?
             .map(|(def, _)| def)
             .ok_or_else(|| DbError::ExerciseNotFound(canonical_name.clone()))?;
 
-        // Initial filter for the exercise
         let base_filter = WorkoutFilters {
             exercise_name: Some(&canonical_name),
             ..Default::default()
         };
 
+        // list_workouts already filters for active workouts and active exercises
         let mut history = self
-            .list_workouts(&base_filter) // This should return Result<Vec<Workout>, anyhow::Error>
+            .list_workouts(&base_filter) 
             .context(format!("Failed graph data fetch for '{canonical_name}'"))?;
 
-        // Apply date range filtering
         if let Some(start_date) = start_date_filter {
             history.retain(|w| w.timestamp.date_naive() >= start_date);
         }
         if let Some(end_date) = end_date_filter {
             history.retain(|w| w.timestamp.date_naive() <= end_date);
         }
-        // Ensure history is sorted by timestamp if needed, BTreeMap handles date sorting later.
         history.sort_by_key(|w| w.timestamp);
 
         if history.is_empty() {
@@ -1099,7 +1081,7 @@ impl AppService {
         }
 
         let mut daily_aggregated_data: BTreeMap<NaiveDate, f64> = BTreeMap::new();
-        for w in history {
+        for w in history { // w is a non-deleted workout for a non-deleted exercise
             let date = w.timestamp.date_naive();
             let entry = daily_aggregated_data.entry(date).or_insert(0.0);
 
@@ -1155,7 +1137,7 @@ impl AppService {
                 }
                 GraphType::WorkoutDistance => {
                     if let Some(d) = w.distance.filter(|&dist| dist > 0.0) {
-                        *entry += d; // Stored as KM
+                        *entry += d; 
                     }
                 }
             }
@@ -1165,13 +1147,12 @@ impl AppService {
             .into_iter()
             .filter_map(|(date, value)| {
                 if value <= 0.0 {
-                    // Filter out non-positive values for plotting
                     return None;
                 }
 
                 let final_val = if graph_type == GraphType::WorkoutDistance {
                     match self.config.units {
-                        Units::Metric => value, // Already KM
+                        Units::Metric => value, 
                         Units::Imperial => value * KM_TO_MILE,
                     }
                 } else {
@@ -1231,22 +1212,20 @@ fn calculate_streaks(timestamps: &[DateTime<Utc>], interval: Duration) -> (u32, 
         let cur_date = ts.date_naive();
         if current > 0 && cur_date == last_date {
             continue;
-        } // Skip same day
+        } 
         if current == 0 || cur_date - last_date <= interval {
             if current == 0 {
                 current = 1;
             }
-            // Start new
             else if cur_date > last_date {
                 current += 1;
-            } // Continue on new day
+            } 
         } else {
             current = 1;
-        } // Broken, start new
+        } 
         last_date = cur_date;
         longest = longest.max(current);
     }
-    // Check if current streak is still active
     if timestamps.last().map_or(true, |last| {
         Utc::now().date_naive() - last.date_naive() > interval
     }) {
@@ -1265,6 +1244,7 @@ fn calculate_effective_weight(
         ExerciseType::BodyWeight => {
             Some(additional_weight.unwrap_or(0.0) + stored_bodyweight.unwrap_or(0.0))
         }
-        _ => additional_weight, // For Resistance/Cardio, effective weight is just the additional weight
+        _ => additional_weight, 
     }
 }
+

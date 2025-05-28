@@ -211,7 +211,6 @@ impl Default for Config {
 /// - `ConfigError::CannotDetermineConfigDir`: If the base configuration directory cannot be found (e.g., on unsupported platforms).
 /// - `ConfigError::Io`: If there's an I/O error creating the configuration directory.
 pub fn get_config_path() -> Result<PathBuf, ConfigError> {
-    let config_dir_override = std::env::var(CONFIG_ENV_VAR).ok();
     #[cfg(target_os = "android")]
     {
         // On Android, just return the current directory joined with the config file name
@@ -219,6 +218,7 @@ pub fn get_config_path() -> Result<PathBuf, ConfigError> {
             PathBuf::from("/data/data/com.task_athlete_gui.app/files").join(CONFIG_FILE_NAME); // Corrected: Use CONFIG_FILE_NAME
         return Ok(path);
     }
+    let config_dir_override = std::env::var(CONFIG_ENV_VAR).ok();
 
     let config_dir_path = if let Some(path_str) = config_dir_override {
         let path = PathBuf::from(path_str);

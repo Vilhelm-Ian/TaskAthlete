@@ -227,7 +227,7 @@ pub struct Workout {
     pub distance: Option<f64>,
     pub notes: Option<String>,
     pub exercise_type: Option<ExerciseType>, // Populated by JOIN
-    // pub deleted: bool, // Not typically included in domain object unless needed for UI
+    // pub last_edited: Option<DateTime<Utc>>, // If needed for display
 }
 
 impl Workout {
@@ -251,7 +251,7 @@ pub struct ExerciseDefinition {
     pub log_reps: bool,
     pub log_duration: bool,
     pub log_distance: bool,
-    // pub deleted: bool, // Not typically included in domain object
+    // pub last_edited: Option<DateTime<Utc>>, // If needed for display
 }
 
 const DB_FILE_NAME: &str = "workouts.sqlite";
@@ -293,6 +293,40 @@ fn add_deleted_column_if_not_exists(conn: &Connection, table_name: &str) -> Resu
     Ok(())
 }
 
+/// Adds a 'last_edited' column to the specified table if it doesn't exist,
+/// and populates it for existing rows.
+fn add_last_edited_column_if_not_exists(conn: &Connection, table_name: &str) -> Result<(), Error> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table_name})"))?;
+    let column_exists = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .any(|col_res| col_res.map_or(false, |col| col == "last_edited"));
+
+    if !column_exists {
+        println!("Adding 'last_edited' column to {table_name} table (step 1: add column)...");
+        // Add the column as nullable first, as SQLite's ALTER TABLE ADD COLUMN
+        // doesn't support non-constant defaults like strftime directly.
+        conn.execute(
+            &format!("ALTER TABLE {table_name} ADD COLUMN last_edited TEXT"),
+            [],
+        )?;
+        println!("Adding 'last_edited' column to {table_name} table (step 2: populate existing rows)...");
+        // Populate the new column for existing rows.
+        // The 'WHERE last_edited IS NULL' is technically redundant if the column was just added,
+        // but it's safer if this function were ever called in a different context.
+        conn.execute(
+            &format!("UPDATE {table_name} SET last_edited = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE last_edited IS NULL"),
+            [],
+        )?;
+        // Note: The NOT NULL constraint is part of the CREATE TABLE statement for new tables.
+        // For existing tables altered here, the application logic will ensure 'last_edited'
+        // is populated on new inserts/updates. A strict NOT NULL constraint
+        // could be added by recreating the table or using newer SQLite versions'
+        // specific ALTER COLUMN commands if absolutely necessary for external tools,
+        // but is not strictly required for this application's own data integrity.
+    }
+    Ok(())
+}
+
 
 pub fn init(conn: &Connection) -> Result<(), Error> {
     conn.execute_batch(
@@ -306,7 +340,8 @@ pub fn init(conn: &Connection) -> Result<(), Error> {
             log_reps BOOLEAN NOT NULL DEFAULT TRUE,
             log_duration BOOLEAN NOT NULL DEFAULT TRUE,
             log_distance BOOLEAN NOT NULL DEFAULT TRUE,
-            deleted BOOLEAN NOT NULL DEFAULT FALSE 
+            deleted BOOLEAN NOT NULL DEFAULT FALSE,
+            last_edited TEXT NOT NULL 
         );
         CREATE TABLE IF NOT EXISTS workouts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -319,18 +354,21 @@ pub fn init(conn: &Connection) -> Result<(), Error> {
             distance REAL,
             bodyweight REAL, 
             notes TEXT,
-            deleted BOOLEAN NOT NULL DEFAULT FALSE
+            deleted BOOLEAN NOT NULL DEFAULT FALSE,
+            last_edited TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS aliases (
             alias_name TEXT PRIMARY KEY NOT NULL COLLATE NOCASE,
             exercise_name TEXT NOT NULL COLLATE NOCASE,
-            deleted BOOLEAN NOT NULL DEFAULT FALSE
+            deleted BOOLEAN NOT NULL DEFAULT FALSE,
+            last_edited TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS bodyweights (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             timestamp TEXT NOT NULL UNIQUE,
             weight REAL NOT NULL,
-            deleted BOOLEAN NOT NULL DEFAULT FALSE
+            deleted BOOLEAN NOT NULL DEFAULT FALSE,
+            last_edited TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_workouts_timestamp ON workouts(timestamp);
         CREATE INDEX IF NOT EXISTS idx_workouts_exercise_name ON workouts(exercise_name);
@@ -346,11 +384,15 @@ pub fn init(conn: &Connection) -> Result<(), Error> {
     add_log_flag_column_if_not_exists(conn, "log_duration", 0)?;
     add_log_flag_column_if_not_exists(conn, "log_distance", 0)?;
 
-    // Add 'deleted' columns for backward compatibility
     add_deleted_column_if_not_exists(conn, "exercises")?;
     add_deleted_column_if_not_exists(conn, "workouts")?;
     add_deleted_column_if_not_exists(conn, "aliases")?;
     add_deleted_column_if_not_exists(conn, "bodyweights")?;
+
+    add_last_edited_column_if_not_exists(conn, "exercises")?;
+    add_last_edited_column_if_not_exists(conn, "workouts")?;
+    add_last_edited_column_if_not_exists(conn, "aliases")?;
+    add_last_edited_column_if_not_exists(conn, "bodyweights")?;
 
     Ok(())
 }
@@ -398,9 +440,8 @@ pub fn add_workout(conn: &Connection, data: &NewWorkoutData) -> Result<i64, Erro
     let sets_val = data.sets.unwrap_or(1);
 
     conn.execute(
-        "INSERT INTO workouts (timestamp, exercise_name, sets, reps, weight, duration_minutes, distance, bodyweight, notes)
-         VALUES (:ts, :ex_name, :sets, :reps, :weight, :duration, :distance, :bw, :notes)", // 'deleted' defaults to FALSE
-
+        "INSERT INTO workouts (timestamp, exercise_name, sets, reps, weight, duration_minutes, distance, bodyweight, notes, last_edited)
+         VALUES (:ts, :ex_name, :sets, :reps, :weight, :duration, :distance, :bw, :notes, :last_edited)", 
         named_params! {
             ":ts": timestamp_str,
             ":ex_name": data.exercise_name,
@@ -411,6 +452,7 @@ pub fn add_workout(conn: &Connection, data: &NewWorkoutData) -> Result<i64, Erro
             ":distance": data.distance,
             ":bw": data.bodyweight_to_use,
             ":notes": data.notes,
+            ":last_edited": timestamp_str, 
         },
     ).map_err(Error::InsertFailed)?;
     Ok(conn.last_insert_rowid())
@@ -463,7 +505,7 @@ pub fn update_workout(
     }
     if new_bodyweight.is_some() {
         updates.push("bodyweight = :bodyweight");
-        params_map.insert(":bodyweight".into(), Box::new(new_bodyweight)); // Corrected param name
+        params_map.insert(":bodyweight".into(), Box::new(new_bodyweight));
     }
     if new_notes.is_some() {
         updates.push("notes = :notes");
@@ -475,10 +517,13 @@ pub fn update_workout(
     }
 
     if updates.is_empty() {
-         return Ok(0); // No actual fields to update
+         return Ok(0); 
     }
 
-    let sql = format!("UPDATE workouts SET {} WHERE id = :id AND deleted = FALSE", updates.join(", ")); // Only update non-deleted
+    updates.push("last_edited = :last_edited_val");
+    params_map.insert(":last_edited_val".into(), Box::new(Utc::now().to_rfc3339()));
+
+    let sql = format!("UPDATE workouts SET {} WHERE id = :id AND deleted = FALSE", updates.join(", "));
     params_map.insert(":id".into(), Box::new(id));
 
     let params_for_exec: Vec<(&str, &dyn ToSql)> = params_map
@@ -491,7 +536,6 @@ pub fn update_workout(
         .map_err(Error::UpdateFailed)?;
 
     if rows_affected == 0 {
-        // Could be not found or already deleted
         Err(Error::WorkoutNotFound(id)) 
     } else {
         Ok(rows_affected as u64)
@@ -500,11 +544,12 @@ pub fn update_workout(
 
 /// Soft deletes a workout entry from the database by its ID.
 pub fn delete_workout(conn: &Connection, id: i64) -> Result<u64, Error> {
+    let now_str = Utc::now().to_rfc3339();
     let rows_affected = conn
-        .execute("UPDATE workouts SET deleted = TRUE WHERE id = ? AND deleted = FALSE", params![id])
+        .execute("UPDATE workouts SET deleted = TRUE, last_edited = ?1 WHERE id = ?2 AND deleted = FALSE", params![now_str, id])
         .map_err(Error::DeleteFailed)?;
     if rows_affected == 0 {
-        Err(Error::WorkoutNotFound(id)) // Not found or already deleted
+        Err(Error::WorkoutNotFound(id)) 
     } else {
         Ok(rows_affected as u64)
     }
@@ -570,7 +615,7 @@ pub fn list_workouts_filtered(
 ) -> Result<Vec<Workout>, Error> {
     let mut sql = "SELECT w.id, w.timestamp, w.exercise_name, w.sets, w.reps, w.weight, w.duration_minutes, w.distance, w.bodyweight, w.notes, e.type
                    FROM workouts w LEFT JOIN exercises e ON w.exercise_name = e.name 
-                   WHERE w.deleted = FALSE AND (e.id IS NULL OR e.deleted = FALSE)".to_string(); // Filter deleted workouts and ensure joined exercises are not deleted (or exercise doesn't exist)
+                   WHERE w.deleted = FALSE AND (e.id IS NULL OR e.deleted = FALSE)".to_string(); 
     let mut params_map: HashMap<String, Box<dyn ToSql>> = HashMap::new();
 
     if let Some(name) = filters.exercise_name {
@@ -594,9 +639,9 @@ pub fn list_workouts_filtered(
     }
 
     if filters.date.is_some() {
-        sql.push_str(" ORDER BY w.timestamp ASC");
+        sql.push_str(" ORDER BY w.timestamp ASC, w.last_edited ASC");
     } else {
-        sql.push_str(" ORDER BY w.timestamp DESC");
+        sql.push_str(" ORDER BY w.timestamp DESC, w.last_edited DESC");
     }
 
     if filters.date.is_none() {
@@ -642,7 +687,7 @@ pub fn list_workouts_for_exercise_on_nth_last_day(
                 LEFT JOIN exercises e ON w.exercise_name = e.name
                 JOIN RankedDays rd ON date(w.timestamp) = rd.workout_date
                 WHERE w.exercise_name = :ex_name COLLATE NOCASE AND w.deleted = FALSE AND (e.id IS NULL OR e.deleted = FALSE)
-                ORDER BY w.timestamp ASC;";
+                ORDER BY w.timestamp ASC, w.last_edited ASC;";
 
     let mut stmt = conn.prepare(sql).map_err(Error::QueryFailed)?;
     let workout_iter = stmt
@@ -677,20 +722,21 @@ pub fn create_exercise(
     let final_log_r = log_reps.unwrap_or(default_log_r);
     let final_log_dur = log_duration.unwrap_or(default_log_dur);
     let final_log_dist = log_distance.unwrap_or(default_log_dist);
+    let now_str = Utc::now().to_rfc3339();
 
-    // 'deleted' defaults to FALSE
     match conn.execute(
-        "INSERT INTO exercises (name, type, muscles, log_weight, log_reps, log_duration, log_distance)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![
-            name,
-            type_str,
-            muscles,
-            final_log_w,
-            final_log_r,
-            final_log_dur,
-            final_log_dist
-        ],
+        "INSERT INTO exercises (name, type, muscles, log_weight, log_reps, log_duration, log_distance, last_edited)
+         VALUES (:name, :type, :muscles, :log_w, :log_r, :log_dur, :log_dist, :last_edited)",
+        named_params! {
+            ":name": name,
+            ":type": type_str,
+            ":muscles": muscles,
+            ":log_w": final_log_w,
+            ":log_r": final_log_r,
+            ":log_dur": final_log_dur,
+            ":log_dist": final_log_dist,
+            ":last_edited": now_str,
+        },
     ) {
         Ok(_) => Ok(conn.last_insert_rowid()),
         Err(e) => {
@@ -703,7 +749,7 @@ pub fn create_exercise(
             ) = &e 
             {
                 let msg_lower = msg.to_lowercase();
-                if msg_lower.contains("unique constraint failed") || msg_lower.contains("exercises.name") {
+                if msg_lower.contains("unique constraint failed") && msg_lower.contains("exercises.name") {
                      return Err(Error::ExerciseNameNotUnique(name.to_string()));
                 }
             }
@@ -724,7 +770,6 @@ pub fn update_exercise(
     new_log_duration: Option<bool>,
     new_log_distance: Option<bool>,
 ) -> Result<u64, Error> {
-    // Get only non-deleted exercise
     let exercise = get_exercise_by_name(conn, canonical_name_to_update)?
         .ok_or_else(|| Error::ExerciseNotFound(canonical_name_to_update.to_string()))?;
     let id = exercise.id;
@@ -768,10 +813,13 @@ pub fn update_exercise(
     if updates.is_empty() {
         return Ok(0);
     }
+    
+    let now_str = Utc::now().to_rfc3339();
+    updates.push("last_edited = :last_edited_val");
+    params_map.insert(":last_edited_val".into(), Box::new(now_str.clone()));
+
 
     let tx = conn.transaction().map_err(Error::Connection)?;
-
-    // Update non-deleted exercise
     let sql_update_exercise = format!("UPDATE exercises SET {} WHERE id = :id AND deleted = FALSE", updates.join(", "));
     params_map.insert(":id".into(), Box::new(id));
     let params_for_exec: Vec<(&str, &dyn ToSql)> = params_map
@@ -791,7 +839,6 @@ pub fn update_exercise(
             ) = e
             {
                 if name_being_changed {
-                    // Name uniqueness check, considers already deleted items if UNIQUE constraint is on name only
                     return Err(Error::ExerciseNameNotUnique(target_new_name.to_string()));
                 }
             }
@@ -799,20 +846,19 @@ pub fn update_exercise(
         }
     };
 
-    if name_being_changed && rows_affected > 0 { // Only cascade if exercise was actually updated
-        // Cascade name change to non-deleted workouts and aliases
-        tx.execute("UPDATE workouts SET exercise_name = :new_name WHERE exercise_name = :old_name COLLATE NOCASE AND deleted = FALSE",
-                   named_params! { ":new_name": target_new_name, ":old_name": original_name })
+    if name_being_changed && rows_affected > 0 {
+        tx.execute("UPDATE workouts SET exercise_name = :new_name, last_edited = :now WHERE exercise_name = :old_name COLLATE NOCASE AND deleted = FALSE",
+                   named_params! { ":new_name": target_new_name, ":old_name": original_name, ":now": now_str })
           .map_err(Error::UpdateFailed)?;
-        tx.execute("UPDATE aliases SET exercise_name = :new_name WHERE exercise_name = :old_name COLLATE NOCASE AND deleted = FALSE",
-                   named_params! { ":new_name": target_new_name, ":old_name": original_name })
+        tx.execute("UPDATE aliases SET exercise_name = :new_name, last_edited = :now WHERE exercise_name = :old_name COLLATE NOCASE AND deleted = FALSE",
+                   named_params! { ":new_name": target_new_name, ":old_name": original_name, ":now": now_str })
           .map_err(Error::UpdateFailed)?;
     }
 
     tx.commit().map_err(Error::Connection)?;
 
     if rows_affected == 0 {
-        Err(Error::ExerciseNotFound(original_name)) // Not found or already deleted
+        Err(Error::ExerciseNotFound(original_name))
     } else {
         Ok(rows_affected as u64)
     }
@@ -820,26 +866,28 @@ pub fn update_exercise(
 
 /// Soft deletes an exercise definition and its associated non-deleted aliases.
 pub fn delete_exercise(conn: &mut Connection, canonical_name: &str) -> Result<u64, Error> {
-    let exercise = get_exercise_by_name(conn, canonical_name)? // Ensures we're getting an active one
+    let exercise = get_exercise_by_name(conn, canonical_name)? 
         .ok_or_else(|| Error::ExerciseNotFound(canonical_name.to_string()))?;
     let id = exercise.id;
     let name_to_delete = exercise.name;
+    let now_str = Utc::now().to_rfc3339();
 
     let tx = conn.transaction().map_err(Error::Connection)?;
-    // Soft delete associated non-deleted aliases
     tx.execute(
-        "UPDATE aliases SET deleted = TRUE WHERE exercise_name = ? COLLATE NOCASE AND deleted = FALSE",
-        params![name_to_delete],
+        "UPDATE aliases SET deleted = TRUE, last_edited = :now WHERE exercise_name = :name COLLATE NOCASE AND deleted = FALSE",
+        named_params! { ":name": name_to_delete, ":now": now_str },
     )
     .map_err(Error::DeleteFailed)?;
-    // Soft delete the exercise itself
+    
     let rows_affected = tx
-        .execute("UPDATE exercises SET deleted = TRUE WHERE id = ? AND deleted = FALSE", params![id])
+        .execute("UPDATE exercises SET deleted = TRUE, last_edited = :now WHERE id = :id AND deleted = FALSE", 
+        named_params! { ":id": id, ":now": now_str }
+        )
         .map_err(Error::DeleteFailed)?;
     tx.commit().map_err(Error::Connection)?;
 
     if rows_affected == 0 {
-        Err(Error::ExerciseNotFound(name_to_delete)) // Already deleted or truly not found
+        Err(Error::ExerciseNotFound(name_to_delete)) 
     } else {
         Ok(rows_affected as u64)
     }
@@ -877,7 +925,7 @@ pub fn get_exercise_by_name(
     let mut stmt = conn
         .prepare(
             "SELECT id, name, type, muscles, log_weight, log_reps, log_duration, log_distance
-             FROM exercises WHERE name = ?1 COLLATE NOCASE AND deleted = FALSE", // Added deleted = FALSE
+             FROM exercises WHERE name = ?1 COLLATE NOCASE AND deleted = FALSE", 
         )
         .map_err(Error::QueryFailed)?;
     stmt.query_row(params![name], map_row_to_exercise_definition)
@@ -890,7 +938,7 @@ pub fn get_exercise_by_id(conn: &Connection, id: i64) -> Result<Option<ExerciseD
     let mut stmt = conn
         .prepare(
             "SELECT id, name, type, muscles, log_weight, log_reps, log_duration, log_distance
-             FROM exercises WHERE id = ?1 AND deleted = FALSE", // Added deleted = FALSE
+             FROM exercises WHERE id = ?1 AND deleted = FALSE", 
         )
         .map_err(Error::QueryFailed)?;
     stmt.query_row(params![id], map_row_to_exercise_definition)
@@ -903,11 +951,14 @@ pub fn create_alias(
     alias_name: &str,
     canonical_exercise_name: &str,
 ) -> Result<(), Error> {
-    // 'deleted' defaults to FALSE.
-    // If alias_name (PK) exists, even if soft-deleted, this will fail.
+    let now_str = Utc::now().to_rfc3339();
     match conn.execute(
-        "INSERT INTO aliases (alias_name, exercise_name) VALUES (?1, ?2)",
-        params![alias_name, canonical_exercise_name],
+        "INSERT INTO aliases (alias_name, exercise_name, last_edited) VALUES (:alias, :ex_name, :last_edited)",
+        named_params! {
+            ":alias": alias_name,
+            ":ex_name": canonical_exercise_name,
+            ":last_edited": now_str,
+        },
     ) {
         Ok(_) => Ok(()),
         Err(e) => {
@@ -929,14 +980,15 @@ pub fn create_alias(
 
 /// Soft deletes an alias by its name (case-insensitive).
 pub fn delete_alias(conn: &Connection, alias_name: &str) -> Result<u64, Error> {
+    let now_str = Utc::now().to_rfc3339();
     let rows_affected = conn
         .execute(
-            "UPDATE aliases SET deleted = TRUE WHERE alias_name = ?1 COLLATE NOCASE AND deleted = FALSE", // Soft delete
-            params![alias_name],
+            "UPDATE aliases SET deleted = TRUE, last_edited = ?1 WHERE alias_name = ?2 COLLATE NOCASE AND deleted = FALSE", 
+            params![now_str, alias_name],
         )
         .map_err(Error::DeleteFailed)?;
     if rows_affected == 0 {
-        Err(Error::AliasNotFound(alias_name.to_string())) // Not found or already deleted
+        Err(Error::AliasNotFound(alias_name.to_string())) 
     } else {
         Ok(rows_affected as u64)
     }
@@ -948,7 +1000,7 @@ pub fn get_canonical_name_for_alias(
     alias_name: &str,
 ) -> Result<Option<String>, Error> {
     let mut stmt = conn
-        .prepare("SELECT exercise_name FROM aliases WHERE alias_name = ?1 COLLATE NOCASE AND deleted = FALSE") // Added deleted = FALSE
+        .prepare("SELECT exercise_name FROM aliases WHERE alias_name = ?1 COLLATE NOCASE AND deleted = FALSE") 
         .map_err(Error::QueryFailed)?;
     stmt.query_row(params![alias_name], |row| row.get(0))
         .optional()
@@ -958,7 +1010,7 @@ pub fn get_canonical_name_for_alias(
 /// Lists all non-deleted defined aliases and their corresponding canonical exercise names.
 pub fn list_aliases(conn: &Connection) -> Result<HashMap<String, String>, Error> {
     let mut stmt = conn
-        .prepare("SELECT alias_name, exercise_name FROM aliases WHERE deleted = FALSE ORDER BY alias_name ASC") // Added deleted = FALSE
+        .prepare("SELECT alias_name, exercise_name FROM aliases WHERE deleted = FALSE ORDER BY alias_name ASC") 
         .map_err(Error::QueryFailed)?;
     let alias_iter = stmt
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
@@ -981,13 +1033,13 @@ pub fn get_exercise_by_identifier(
     identifier: &str,
 ) -> Result<Option<(ExerciseDefinition, ResolvedByType)>, Error> {
     if let Ok(id) = identifier.parse::<i64>() {
-        if let Some(exercise) = get_exercise_by_id(conn, id)? { // Will only get non-deleted
+        if let Some(exercise) = get_exercise_by_id(conn, id)? { 
             return Ok(Some((exercise, ResolvedByType::Id)));
         }
         return Ok(None); 
     }
-    if let Some(canonical_name) = get_canonical_name_for_alias(conn, identifier)? { // Will only get non-deleted alias
-        if let Some(exercise) = get_exercise_by_name(conn, &canonical_name)? { // Will only get non-deleted exercise
+    if let Some(canonical_name) = get_canonical_name_for_alias(conn, identifier)? { 
+        if let Some(exercise) = get_exercise_by_name(conn, &canonical_name)? { 
             return Ok(Some((exercise, ResolvedByType::Alias)));
         }
         eprintln!(
@@ -995,7 +1047,7 @@ pub fn get_exercise_by_identifier(
         );
         return Ok(None);
     }
-    match get_exercise_by_name(conn, identifier)? { // Will only get non-deleted
+    match get_exercise_by_name(conn, identifier)? { 
         Some(exercise) => Ok(Some((exercise, ResolvedByType::Name))),
         None => Ok(None),
     }
@@ -1008,7 +1060,7 @@ pub fn list_exercises(
     muscle_filter: Option<Vec<&str>>,
 ) -> Result<Vec<ExerciseDefinition>, Error> {
     let mut sql = "SELECT id, name, type, muscles, log_weight, log_reps, log_duration, log_distance
-                   FROM exercises WHERE deleted = FALSE" // Added deleted = FALSE
+                   FROM exercises WHERE deleted = FALSE" 
         .to_string();
     let mut params_map: HashMap<String, Box<dyn ToSql>> = HashMap::new();
 
@@ -1057,7 +1109,7 @@ pub fn get_max_effective_weight_for_exercise(
              END
          )
          FROM workouts w JOIN exercises e ON w.exercise_name = e.name COLLATE NOCASE
-         WHERE w.exercise_name = ?1 COLLATE NOCASE AND w.deleted = FALSE AND e.deleted = FALSE", // Filter deleted
+         WHERE w.exercise_name = ?1 COLLATE NOCASE AND w.deleted = FALSE AND e.deleted = FALSE", 
         params![canonical_exercise_name],
         |row| row.get(0),
     )
@@ -1073,7 +1125,7 @@ pub fn get_max_reps_for_exercise(
 ) -> Result<Option<i64>, Error> {
     conn.query_row(
         "SELECT MAX(reps) FROM workouts w JOIN exercises e ON w.exercise_name = e.name COLLATE NOCASE
-         WHERE w.exercise_name = ?1 COLLATE NOCASE AND reps IS NOT NULL AND w.deleted = FALSE AND e.deleted = FALSE", // Filter deleted
+         WHERE w.exercise_name = ?1 COLLATE NOCASE AND reps IS NOT NULL AND w.deleted = FALSE AND e.deleted = FALSE", 
         params![canonical_exercise_name], |row| row.get(0),
     ).optional().map_err(Error::QueryFailed).map(Option::flatten)
 }
@@ -1085,7 +1137,7 @@ pub fn get_max_duration_for_exercise(
 ) -> Result<Option<i64>, Error> {
     conn.query_row(
         "SELECT MAX(duration_minutes) FROM workouts w JOIN exercises e ON w.exercise_name = e.name COLLATE NOCASE
-         WHERE w.exercise_name = ?1 COLLATE NOCASE AND duration_minutes IS NOT NULL AND w.deleted = FALSE AND e.deleted = FALSE", // Filter deleted
+         WHERE w.exercise_name = ?1 COLLATE NOCASE AND duration_minutes IS NOT NULL AND w.deleted = FALSE AND e.deleted = FALSE", 
         params![canonical_exercise_name], |row| row.get(0),
     ).optional().map_err(Error::QueryFailed).map(Option::flatten)
 }
@@ -1097,7 +1149,7 @@ pub fn get_max_distance_for_exercise(
 ) -> Result<Option<f64>, Error> {
     conn.query_row(
         "SELECT MAX(distance) FROM workouts w JOIN exercises e ON w.exercise_name = e.name COLLATE NOCASE
-         WHERE w.exercise_name = ?1 COLLATE NOCASE AND distance IS NOT NULL AND w.deleted = FALSE AND e.deleted = FALSE", // Filter deleted
+         WHERE w.exercise_name = ?1 COLLATE NOCASE AND distance IS NOT NULL AND w.deleted = FALSE AND e.deleted = FALSE", 
         params![canonical_exercise_name], |row| row.get(0),
     ).optional().map_err(Error::QueryFailed).map(Option::flatten)
 }
@@ -1109,7 +1161,7 @@ pub fn get_workout_timestamps_for_exercise(
 ) -> Result<Vec<DateTime<Utc>>, Error> {
     let mut stmt = conn.prepare(
         "SELECT w.timestamp FROM workouts w JOIN exercises e ON w.exercise_name = e.name COLLATE NOCASE
-         WHERE w.exercise_name = ?1 COLLATE NOCASE AND w.deleted = FALSE AND e.deleted = FALSE ORDER BY w.timestamp ASC", // Filter deleted
+         WHERE w.exercise_name = ?1 COLLATE NOCASE AND w.deleted = FALSE AND e.deleted = FALSE ORDER BY w.timestamp ASC, w.last_edited ASC", 
     )?;
     let timestamp_iter = stmt.query_map(params![canonical_exercise_name], |row| {
         let timestamp_str: String = row.get(0)?;
@@ -1136,22 +1188,20 @@ pub fn add_bodyweight(
     weight: f64,
 ) -> Result<i64, Error> {
     let timestamp_str = timestamp.to_rfc3339();
-    // 'deleted' defaults to FALSE.
-    // If timestamp (UNIQUE) exists, even if soft-deleted, this will fail.
     conn.execute(
-        "INSERT INTO bodyweights (timestamp, weight) VALUES (?1, ?2)",
-        params![timestamp_str, weight],
+        "INSERT INTO bodyweights (timestamp, weight, last_edited) VALUES (?1, ?2, ?3)",
+        params![timestamp_str, weight, timestamp_str], 
     )
     .map_err(|e| {
         if let rusqlite::Error::SqliteFailure(
             rusqlite::ffi::Error {
                 code: rusqlite::ErrorCode::ConstraintViolation,
-                .. // extended_code might not always be 2067 for all UNIQUE violations
+                .. 
             },
             Some(msg),
         ) = &e
         {
-            if msg.to_lowercase().contains("bodyweights.timestamp") { // Check msg for more reliable UNIQUE detection
+            if msg.to_lowercase().contains("bodyweights.timestamp") { 
                  return Error::BodyweightEntryExists(timestamp_str);
             }
         }
@@ -1163,7 +1213,7 @@ pub fn add_bodyweight(
 /// Retrieves the most recent non-deleted bodyweight entry.
 pub fn get_latest_bodyweight(conn: &Connection) -> Result<Option<f64>, Error> {
     conn.query_row(
-        "SELECT weight FROM bodyweights WHERE deleted = FALSE ORDER BY timestamp DESC LIMIT 1", // Added deleted = FALSE
+        "SELECT weight FROM bodyweights WHERE deleted = FALSE ORDER BY timestamp DESC, last_edited DESC LIMIT 1", 
         [],
         |row| row.get(0),
     )
@@ -1177,7 +1227,7 @@ pub fn list_bodyweights(
     limit: u32,
 ) -> Result<Vec<(i64, DateTime<Utc>, f64)>, Error> {
     let mut stmt = conn.prepare(
-        "SELECT id, timestamp, weight FROM bodyweights WHERE deleted = FALSE ORDER BY timestamp DESC LIMIT ?1", // Added deleted = FALSE
+        "SELECT id, timestamp, weight FROM bodyweights WHERE deleted = FALSE ORDER BY timestamp DESC, last_edited DESC LIMIT ?1", 
     )?;
     let iter = stmt.query_map(params![limit], |row| {
         let id: i64 = row.get(0)?;
@@ -1202,11 +1252,12 @@ pub fn list_bodyweights(
 
 /// Soft deletes a bodyweight entry by its ID.
 pub fn delete_bodyweight(conn: &Connection, id: i64) -> Result<usize, Error> {
+    let now_str = Utc::now().to_rfc3339();
     let rows_affected = conn
-        .execute("UPDATE bodyweights SET deleted = TRUE WHERE id = ? AND deleted = FALSE", params![id]) // Soft delete
+        .execute("UPDATE bodyweights SET deleted = TRUE, last_edited = ?1 WHERE id = ?2 AND deleted = FALSE", params![now_str, id]) 
         .map_err(Error::DeleteFailed)?;
     if rows_affected == 0 {
-        Err(Error::BodyWeightEntryNotFound(id)) // Not found or already deleted
+        Err(Error::BodyWeightEntryNotFound(id)) 
     } else {
         Ok(rows_affected)
     }
@@ -1215,7 +1266,7 @@ pub fn delete_bodyweight(conn: &Connection, id: i64) -> Result<usize, Error> {
 /// Retrieves a distinct list of dates on which any non-deleted workout was recorded.
 pub fn get_all_dates_with_exercise(conn: &Connection) -> Result<Vec<NaiveDate>, Error> {
     let mut stmt = conn
-        .prepare("SELECT DISTINCT DATE(timestamp) FROM workouts WHERE deleted = FALSE ORDER BY DATE(timestamp) ASC") // Added deleted = FALSE
+        .prepare("SELECT DISTINCT DATE(timestamp) FROM workouts WHERE deleted = FALSE ORDER BY DATE(timestamp) ASC") 
         .map_err(Error::QueryFailed)?;
     let date_iter = stmt
         .query_map([], |row| {
@@ -1237,7 +1288,7 @@ pub fn get_all_dates_with_exercise(conn: &Connection) -> Result<Vec<NaiveDate>, 
 /// Retrieves a sorted list of unique muscle names defined across all non-deleted exercises.
 pub fn list_all_muscles(conn: &Connection) -> Result<Vec<String>, Error> {
     let mut stmt = conn
-        .prepare("SELECT muscles FROM exercises WHERE muscles IS NOT NULL AND muscles != '' AND deleted = FALSE") // Added deleted = FALSE
+        .prepare("SELECT muscles FROM exercises WHERE muscles IS NOT NULL AND muscles != '' AND deleted = FALSE") 
         .map_err(Error::QueryFailed)?;
     let muscle_csv_iter = stmt
         .query_map([], |row| row.get::<_, String>(0))
@@ -1301,7 +1352,7 @@ pub fn get_workout_dates_for_month_db(
          WHERE CAST(strftime('%Y', timestamp) AS INTEGER) = ?1 \
            AND CAST(strftime('%m', timestamp) AS INTEGER) = ?2 \
            AND deleted = FALSE \
-         ORDER BY workout_day;", // Added deleted = FALSE
+         ORDER BY workout_day;", 
         )
         .map_err(Error::QueryFailed)?;
 

@@ -2,6 +2,7 @@ bodyweight = 70.0
 units = "metric"
 prompt_for_bodyweight = true
 streak_interval_days = 1
+sync_server_url = "http://127.0.0.1:3030"
 
 [theme]
 header_color = "Green"

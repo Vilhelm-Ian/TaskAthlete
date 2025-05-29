@@ -1,4 +1,5 @@
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use comfy_table::Color;
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -180,6 +181,8 @@ pub struct Config {
     pub target_bodyweight: Option<f64>,
     pub theme: Theme,
     pub pb_notifications: PbNotificationConfig, // Grouped PB settings
+    pub last_sync_timestamp: Option<DateTime<Utc>>, // New field for sync
+    pub sync_server_url: Option<String>,        // New field for sync server
 }
 
 // Implement Default for Config manually to set defaults correctly
@@ -193,6 +196,8 @@ impl Default for Config {
             target_bodyweight: None,
             theme: Theme::default(),
             pb_notifications: PbNotificationConfig::default(), // Use nested default
+            last_sync_timestamp: None,                         // Default to None
+            sync_server_url: Some("http://127.0.0.1:3030".to_string()), // Default to server URL
         }
     }
 }

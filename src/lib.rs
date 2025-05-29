@@ -1,16 +1,19 @@
 use anyhow::{bail, Context, Result};
 // Use anyhow::Result as standard Result for service layer
 use chrono::{DateTime, Datelike, Duration, NaiveDate, TimeZone, Utc};
+use crate::sync_client::{ChangesPayload, ConfigChange};
 use db::NewWorkoutData; // Import specific struct needed
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use toml;
 
 // --- Declare modules ---
 mod config;
 pub mod db;
+pub mod sync_client;
 
 // --- Expose public types ---
 pub use config::{
@@ -152,6 +155,16 @@ pub struct AppService {
     pub db_path: PathBuf,
     pub config_path: PathBuf,
 }
+
+#[derive(Default, Debug)]
+pub struct SyncSummary {
+    pub config: bool,
+    pub exercises: usize,
+    pub workouts: usize,
+    pub aliases: usize,
+    pub bodyweights: usize,
+}
+
 
 impl AppService {
     /// Initializes the application service.
@@ -546,6 +559,7 @@ impl AppService {
             .resolve_identifier_to_canonical_name(exercise_identifier)?
             .ok_or_else(|| DbError::ExerciseNotFound(exercise_identifier.to_string()))?;
 
+        println!("deleted2");
         db::create_alias(&self.conn, trimmed_alias, &canonical_name).map_err(
             |db_err| match db_err {
                 DbError::AliasAlreadyExists(_) => anyhow::anyhow!(db_err), // Will trigger if alias name (PK) is taken, even if soft-deleted
@@ -592,6 +606,7 @@ impl AppService {
             params.implicit_muscles,
         )?;
         let canonical_exercise_name = &exercise_def.name;
+        println!("here");
 
         let mut violations = vec![];
 
@@ -805,6 +820,8 @@ impl AppService {
             timestamp: Utc::now(),
             exercise_name: String::new(),
             exercise_type: None, 
+            deleted: false,
+            last_edited: Utc::now()
         };
 
         db::update_workout(
@@ -1172,6 +1189,135 @@ impl AppService {
         db::list_all_muscles(&self.conn)
             .context("Failed to list all muscles")
             .map_err(Into::into)
+    }
+        pub fn get_last_sync_timestamp(&self) -> Option<DateTime<Utc>> {
+        self.config.last_sync_timestamp
+    }
+
+    pub fn set_last_sync_timestamp(&mut self, ts: DateTime<Utc>) -> Result<(), ConfigError> {
+        self.config.last_sync_timestamp = Some(ts);
+        self.save_config()
+    }
+
+    fn get_server_url(&self, server_url_override: Option<String>) -> Result<String> {
+        server_url_override
+            .or_else(|| self.config.sync_server_url.clone())
+            .ok_or_else(|| anyhow::anyhow!("Sync server URL not configured and no override provided."))
+    }
+
+    async fn collect_local_changes(&self, since: Option<DateTime<Utc>>) -> Result<ChangesPayload> {
+        let config_path = self.get_config_path();
+        let current_config_content = std::fs::read_to_string(config_path)
+            .with_context(|| format!("Failed to read config file for sync: {:?}", config_path))?;
+
+        let config_file_metadata = std::fs::metadata(config_path)
+            .with_context(|| format!("Failed to get metadata for config file: {:?}", config_path))?;
+        let config_mod_time: DateTime<Utc> = config_file_metadata.modified()
+            .context("Failed to get modification time for config file")?.into();
+
+        let config_change = if since.map_or(true, |s_ts| config_mod_time > s_ts) {
+            Some(ConfigChange { // Use sync_client::ConfigChange or ensure types match
+                content: current_config_content,
+                last_edited: config_mod_time,
+            })
+        } else {
+            None
+        };
+
+        Ok(ChangesPayload {
+            config: config_change,
+            exercises: db::get_exercises_modified_since(&self.conn, since)
+                .context("Failed to get modified exercises for sync")?,
+            workouts: db::get_workouts_modified_since(&self.conn, since)
+                .context("Failed to get modified workouts for sync")?,
+            aliases: db::get_aliases_modified_since(&self.conn, since)
+                .context("Failed to get modified aliases for sync")?,
+            bodyweights: db::get_bodyweights_modified_since(&self.conn, since)
+                .context("Failed to get modified bodyweights for sync")?,
+        })
+    }
+
+    async fn apply_server_changes(&mut self, changes: ChangesPayload) -> Result<SyncSummary> {
+        let mut summary = SyncSummary::default();
+        let local_config_path = self.get_config_path().to_path_buf();
+        let tx = self.conn.transaction().context("Failed to start transaction for applying server changes")?;
+
+        if let Some(server_config_change) = changes.config {
+            let local_config_mod_time: DateTime<Utc> = std::fs::metadata(&local_config_path)
+                .and_then(|m| m.modified())
+                .map(Into::into)
+                .unwrap_or_else(|_| Utc.timestamp_opt(0,0).unwrap()); // If file doesn't exist, treat as very old
+
+            if server_config_change.last_edited > local_config_mod_time {
+                let new_config_from_server: Config = toml::from_str(&server_config_change.content)
+                    .context("Failed to parse server config content")?;
+                
+                // Preserve client-only or sensitive fields if any, or merge carefully.
+                // For now, assume server config is authoritative for shared fields.
+                // The `last_sync_timestamp` should NOT be overwritten by server's config.
+                let old_last_sync = self.config.last_sync_timestamp;
+                self.config = new_config_from_server;
+                self.config.last_sync_timestamp = old_last_sync; // Preserve this crucial client-side state
+
+                config::save(&local_config_path, &self.config).context("Failed to save synced config")?;
+                println!("Applied server config changes.");
+                summary.config = true;
+            } else {
+                 println!("Server config not newer or local file missing, skipped applying server config. Server last_edited: {}, Local approx last_edited: {}", server_config_change.last_edited, local_config_mod_time);
+            }
+        }
+
+        for exercise_def in changes.exercises {
+            db::upsert_exercise(&tx, &exercise_def).context(format!("Failed to upsert exercise ID {}", exercise_def.id))?;
+            summary.exercises += 1;
+        }
+        for workout in changes.workouts {
+            db::upsert_workout(&tx, &workout).context(format!("Failed to upsert workout ID {}", workout.id))?;
+            summary.workouts += 1;
+        }
+        for alias_entry in changes.aliases {
+            db::upsert_alias(&tx, &alias_entry).context(format!("Failed to upsert alias '{}'", alias_entry.alias_name))?;
+            summary.aliases += 1;
+        }
+        for bw_entry in changes.bodyweights {
+            db::upsert_bodyweight_entry(&tx, &bw_entry).context(format!("Failed to upsert bodyweight entry ID {}", bw_entry.id))?;
+            summary.bodyweights += 1;
+        }
+        
+        tx.commit().context("Failed to commit transaction for server changes")?;
+        Ok(summary)
+    }
+
+    pub async fn perform_sync(&mut self, server_url_override: Option<String>) -> Result<(SyncSummary, SyncSummary)> {
+        let server_url = self.get_server_url(server_url_override)?;
+        let client = sync_client::SyncClient::new(server_url.clone());
+        let last_sync_ts = self.get_last_sync_timestamp();
+
+        println!("Collecting local changes since {:?}...", last_sync_ts);
+        let local_changes = self.collect_local_changes(last_sync_ts).await
+            .context("Failed to collect local changes")?;
+        
+        let summary_sent = SyncSummary {
+            config: local_changes.config.is_some(),
+            exercises: local_changes.exercises.len(),
+            workouts: local_changes.workouts.len(),
+            aliases: local_changes.aliases.len(),
+            bodyweights: local_changes.bodyweights.len(),
+        };
+
+        println!("Pushing changes to server: {}...", server_url);
+        let server_response = client.push_and_pull_changes(last_sync_ts, local_changes).await
+            .context("Sync communication with server failed")?;
+
+        println!("Applying server changes...");
+        let summary_received = self.apply_server_changes(server_response.data_to_client).await
+            .context("Failed to apply server changes")?;
+        
+        self.set_last_sync_timestamp(server_response.server_current_ts)
+            .context("Failed to update last sync timestamp in config")?;
+        
+        println!("Local database and config updated with server changes.");
+        Ok((summary_sent, summary_received))
     }
 }
 

@@ -7,6 +7,7 @@ use std::error::Error as StdError; // Use alias for standard Error trait
 use std::fmt;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
+use rusqlite::Transaction;
 
 // Renamed from DbError to avoid repetition
 #[derive(Error, Debug)]
@@ -77,6 +78,23 @@ impl fmt::Display for ExerciseType {
             Self::BodyWeight => write!(f, "body-weight"),
         }
     }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct AliasEntryForSync {
+    pub alias_name: String,
+    pub exercise_name: String, // Canonical name it points to
+    pub deleted: bool,
+    pub last_edited: DateTime<Utc>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct BodyweightEntryForSync {
+    pub id: i64,
+    pub timestamp: DateTime<Utc>, // Actual measurement time
+    pub weight: f64,
+    pub deleted: bool,
+    pub last_edited: DateTime<Utc>, // Time of this sync record modification
 }
 
 #[derive(Default, Debug)]
@@ -227,7 +245,8 @@ pub struct Workout {
     pub distance: Option<f64>,
     pub notes: Option<String>,
     pub exercise_type: Option<ExerciseType>, // Populated by JOIN
-    // pub last_edited: Option<DateTime<Utc>>, // If needed for display
+    pub deleted: bool,               
+    pub last_edited: DateTime<Utc>, 
 }
 
 impl Workout {
@@ -251,7 +270,8 @@ pub struct ExerciseDefinition {
     pub log_reps: bool,
     pub log_duration: bool,
     pub log_distance: bool,
-    // pub last_edited: Option<DateTime<Utc>>, // If needed for display
+    pub deleted: bool,
+    pub last_edited: DateTime<Utc>
 }
 
 const DB_FILE_NAME: &str = "workouts.sqlite";
@@ -595,6 +615,8 @@ fn map_row_to_workout(row: &Row) -> Result<Workout, rusqlite::Error> {
         distance: row.get("distance")?,
         bodyweight: row.get("bodyweight")?,
         notes: row.get("notes")?,
+        deleted: row.get("deleted")?,
+        last_edited: row.get("last_edited")?,
         exercise_type,
     })
 }
@@ -613,7 +635,7 @@ pub fn list_workouts_filtered(
     conn: &Connection,
     filters: &WorkoutFilters,
 ) -> Result<Vec<Workout>, Error> {
-    let mut sql = "SELECT w.id, w.timestamp, w.exercise_name, w.sets, w.reps, w.weight, w.duration_minutes, w.distance, w.bodyweight, w.notes, e.type
+    let mut sql = "SELECT w.id, w.timestamp, w.exercise_name, w.sets, w.reps, w.weight, w.duration_minutes, w.distance, w.bodyweight, w.notes, e.type, w.deleted, w.last_edited 
                    FROM workouts w LEFT JOIN exercises e ON w.exercise_name = e.name 
                    WHERE w.deleted = FALSE AND (e.id IS NULL OR e.deleted = FALSE)".to_string(); 
     let mut params_map: HashMap<String, Box<dyn ToSql>> = HashMap::new();
@@ -682,7 +704,7 @@ pub fn list_workouts_for_exercise_on_nth_last_day(
                     WHERE exercise_name = :ex_name COLLATE NOCASE AND deleted = FALSE
                     ORDER BY workout_date DESC LIMIT 1 OFFSET :offset
                 )
-                SELECT w.id, w.timestamp, w.exercise_name, w.sets, w.reps, w.weight, w.duration_minutes, w.distance, w.bodyweight, w.notes, e.type
+                SELECT w.id, w.timestamp, w.exercise_name, w.sets, w.reps, w.weight, w.duration_minutes, w.distance, w.bodyweight, w.notes, e.type,  w.deleted, w.last_edited
                 FROM workouts w
                 LEFT JOIN exercises e ON w.exercise_name = e.name
                 JOIN RankedDays rd ON date(w.timestamp) = rd.workout_date
@@ -897,14 +919,10 @@ fn map_row_to_exercise_definition(row: &Row) -> Result<ExerciseDefinition, rusql
     let type_str: String = row.get("type")?;
     let ex_type = ExerciseType::try_from(type_str.as_str()).map_err(|_e| {
         rusqlite::Error::FromSqlConversionFailure(
-            0,
-            rusqlite::types::Type::Text,
-            Box::new(Error::Conversion(format!(
-                "Invalid exercise type '{type_str}' from DB"
-            ))) as Box<dyn StdError + Send + Sync>,
-        )
+            0, rusqlite::types::Type::Text,
+            Box::new(Error::Conversion(format!("Invalid exercise type '{type_str}' from DB")))
+                as Box<dyn StdError + Send + Sync>)
     })?;
-
     Ok(ExerciseDefinition {
         id: row.get("id")?,
         name: row.get("name")?,
@@ -914,6 +932,28 @@ fn map_row_to_exercise_definition(row: &Row) -> Result<ExerciseDefinition, rusql
         log_reps: row.get("log_reps")?,
         log_duration: row.get("log_duration")?,
         log_distance: row.get("log_distance")?,
+        deleted: row.get("deleted")?,
+        last_edited: parse_datetime_from_string(row.get("last_edited")?)?, // Updated
+    })
+}
+
+
+fn map_row_to_alias_entry_for_sync(row: &Row) -> Result<AliasEntryForSync, rusqlite::Error> {
+    Ok(AliasEntryForSync {
+        alias_name: row.get("alias_name")?,
+        exercise_name: row.get("exercise_name")?,
+        deleted: row.get("deleted")?,
+        last_edited: parse_datetime_from_string(row.get("last_edited")?)?,
+    })
+}
+
+fn map_row_to_bodyweight_entry_for_sync(row: &Row) -> Result<BodyweightEntryForSync, rusqlite::Error> {
+    Ok(BodyweightEntryForSync {
+        id: row.get("id")?,
+        timestamp: parse_datetime_from_string(row.get("timestamp")?)?, // This is measurement time
+        weight: row.get("weight")?,
+        deleted: row.get("deleted")?,
+        last_edited: parse_datetime_from_string(row.get("last_edited")?)?,
     })
 }
 
@@ -924,7 +964,7 @@ pub fn get_exercise_by_name(
 ) -> Result<Option<ExerciseDefinition>, Error> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, name, type, muscles, log_weight, log_reps, log_duration, log_distance
+            "SELECT id, name, type, muscles, log_weight, log_reps, log_duration, log_distance, deleted, last_edited
              FROM exercises WHERE name = ?1 COLLATE NOCASE AND deleted = FALSE", 
         )
         .map_err(Error::QueryFailed)?;
@@ -962,6 +1002,7 @@ pub fn create_alias(
     ) {
         Ok(_) => Ok(()),
         Err(e) => {
+            println!("deleted3");
             if let rusqlite::Error::SqliteFailure(
                 rusqlite::ffi::Error {
                     code: rusqlite::ErrorCode::ConstraintViolation,
@@ -1059,7 +1100,7 @@ pub fn list_exercises(
     type_filter: Option<ExerciseType>,
     muscle_filter: Option<Vec<&str>>,
 ) -> Result<Vec<ExerciseDefinition>, Error> {
-    let mut sql = "SELECT id, name, type, muscles, log_weight, log_reps, log_duration, log_distance
+    let mut sql = "SELECT id, name, type, muscles, log_weight, log_reps, log_duration, log_distance, deleted, last_edited
                    FROM exercises WHERE deleted = FALSE" 
         .to_string();
     let mut params_map: HashMap<String, Box<dyn ToSql>> = HashMap::new();
@@ -1369,5 +1410,181 @@ pub fn get_workout_dates_for_month_db(
     }
 
     Ok(dates)
+}
+
+
+fn parse_datetime_from_string(s: String) -> Result<DateTime<Utc>, rusqlite::Error> {
+    DateTime::parse_from_rfc3339(&s)
+        .map(|dt| dt.with_timezone(&Utc))
+        .map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(
+                0, // Placeholder for column index
+                rusqlite::types::Type::Text,
+                Box::new(Error::Conversion(format!(
+                    "Invalid RFC3339 timestamp string '{s}': {e}"
+                ))) as Box<dyn StdError + Send + Sync>,
+            )
+        })
+}
+
+
+pub fn get_exercises_modified_since(conn: &Connection, since: Option<DateTime<Utc>>) -> Result<Vec<ExerciseDefinition>, Error> {
+    let mut query = "SELECT id, name, type, muscles, log_weight, log_reps, log_duration, log_distance, deleted, last_edited FROM exercises".to_string();
+    let mut params_vec: Vec<Box<dyn ToSql>> = Vec::new();
+    if let Some(since_ts) = since {
+        query.push_str(" WHERE last_edited > ?1");
+        params_vec.push(Box::new(since_ts.to_rfc3339()));
+    }
+    query.push_str(" ORDER BY last_edited ASC");
+    let mut stmt = conn.prepare(&query).map_err(Error::QueryFailed)?;
+    let params_slice: Vec<&dyn ToSql> = params_vec.iter().map(|b| b.as_ref()).collect();
+    let x = stmt.query_map(params_slice.as_slice(), map_row_to_exercise_definition)
+        .map_err(Error::QueryFailed)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(map_collect_error);
+    x
+}
+
+pub fn get_workouts_modified_since(conn: &Connection, since: Option<DateTime<Utc>>) -> Result<Vec<Workout>, Error> {
+    let mut query = "SELECT w.id, w.timestamp, w.exercise_name, w.sets, w.reps, w.weight, w.duration_minutes, w.distance, w.bodyweight, w.notes, e.type, w.deleted, w.last_edited 
+                     FROM workouts w LEFT JOIN exercises e ON w.exercise_name = e.name COLLATE NOCASE".to_string(); // Added COLLATE NOCASE
+    let mut params_vec: Vec<Box<dyn ToSql>> = Vec::new();
+    if let Some(since_ts) = since {
+        query.push_str(" WHERE w.last_edited > ?1");
+        params_vec.push(Box::new(since_ts.to_rfc3339()));
+    }
+    query.push_str(" ORDER BY w.last_edited ASC");
+    let mut stmt = conn.prepare(&query).map_err(Error::QueryFailed)?;
+    let params_slice: Vec<&dyn ToSql> = params_vec.iter().map(|b| b.as_ref()).collect();
+    let x = stmt.query_map(params_slice.as_slice(), map_row_to_workout)
+        .map_err(Error::QueryFailed)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(map_collect_error);
+    x
+}
+
+pub fn get_aliases_modified_since(conn: &Connection, since: Option<DateTime<Utc>>) -> Result<Vec<AliasEntryForSync>, Error> {
+    let mut query = "SELECT alias_name, exercise_name, deleted, last_edited FROM aliases".to_string();
+    let mut params_vec: Vec<Box<dyn ToSql>> = Vec::new();
+    if let Some(since_ts) = since {
+        query.push_str(" WHERE last_edited > ?1");
+        params_vec.push(Box::new(since_ts.to_rfc3339()));
+    }
+    query.push_str(" ORDER BY last_edited ASC");
+    let mut stmt = conn.prepare(&query).map_err(Error::QueryFailed)?;
+    let params_slice: Vec<&dyn ToSql> = params_vec.iter().map(|b| b.as_ref()).collect();
+    let x = stmt.query_map(params_slice.as_slice(), map_row_to_alias_entry_for_sync)
+        .map_err(Error::QueryFailed)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(map_collect_error);
+    x
+}
+
+pub fn get_bodyweights_modified_since(conn: &Connection, since: Option<DateTime<Utc>>) -> Result<Vec<BodyweightEntryForSync>, Error> {
+    let mut query = "SELECT id, timestamp, weight, deleted, last_edited FROM bodyweights".to_string();
+    let mut params_vec: Vec<Box<dyn ToSql>> = Vec::new();
+    if let Some(since_ts) = since {
+        query.push_str(" WHERE last_edited > ?1");
+        params_vec.push(Box::new(since_ts.to_rfc3339()));
+    }
+    query.push_str(" ORDER BY last_edited ASC");
+    let mut stmt = conn.prepare(&query).map_err(Error::QueryFailed)?;
+    let params_slice: Vec<&dyn ToSql> = params_vec.iter().map(|b| b.as_ref()).collect();
+    let x = stmt.query_map(params_slice.as_slice(), map_row_to_bodyweight_entry_for_sync)
+        .map_err(Error::QueryFailed)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(map_collect_error);
+    x
+}
+
+pub fn upsert_exercise(tx: &Transaction, ex: &ExerciseDefinition) -> Result<(), Error> {
+    tx.execute(
+        "INSERT INTO exercises (id, name, type, muscles, log_weight, log_reps, log_duration, log_distance, deleted, last_edited)
+         VALUES (:id, :name, :type, :muscles, :lw, :lr, :ldu, :ldi, :del, :le)
+         ON CONFLICT(id) DO UPDATE SET
+           name = excluded.name, type = excluded.type, muscles = excluded.muscles,
+           log_weight = excluded.log_weight, log_reps = excluded.log_reps, log_duration = excluded.log_duration,
+           log_distance = excluded.log_distance, deleted = excluded.deleted, last_edited = excluded.last_edited
+         WHERE excluded.last_edited >= exercises.last_edited",
+        named_params! {
+            ":id": ex.id, ":name": ex.name, ":type": ex.type_.to_string(), ":muscles": ex.muscles,
+            ":lw": ex.log_weight, ":lr": ex.log_reps, ":ldu": ex.log_duration, ":ldi": ex.log_distance,
+            ":del": ex.deleted, ":le": ex.last_edited.to_rfc3339(),
+        }
+    ).map_err(|e| {
+        if let rusqlite::Error::SqliteFailure(ref err_info, Some(ref msg)) = e {
+            if err_info.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE && msg.contains("exercises.name") {
+                return Error::ExerciseNameNotUnique(ex.name.clone());
+            }
+        }
+        Error::UpdateFailed(e)
+    })?;
+    Ok(())
+}
+
+pub fn upsert_workout(tx: &Transaction, w: &Workout) -> Result<(), Error> {
+    tx.execute(
+        "INSERT INTO workouts (id, timestamp, exercise_name, sets, reps, weight, duration_minutes, distance, bodyweight, notes, deleted, last_edited)
+         VALUES (:id, :ts, :ex_name, :sets, :reps, :w, :dur, :dist, :bw, :notes, :del, :le)
+         ON CONFLICT(id) DO UPDATE SET
+           timestamp = excluded.timestamp, exercise_name = excluded.exercise_name, sets = excluded.sets,
+           reps = excluded.reps, weight = excluded.weight, duration_minutes = excluded.duration_minutes,
+           distance = excluded.distance, bodyweight = excluded.bodyweight, notes = excluded.notes,
+           deleted = excluded.deleted, last_edited = excluded.last_edited
+         WHERE excluded.last_edited >= workouts.last_edited",
+        named_params! {
+            ":id": w.id, ":ts": w.timestamp.to_rfc3339(), ":ex_name": w.exercise_name, ":sets": w.sets,
+            ":reps": w.reps, ":w": w.weight, ":dur": w.duration_minutes, ":dist": w.distance,
+            ":bw": w.bodyweight, ":notes": w.notes, ":del": w.deleted, ":le": w.last_edited.to_rfc3339(),
+        }
+    ).map_err(Error::UpdateFailed)?;
+    Ok(())
+}
+
+pub fn upsert_alias(tx: &Transaction, alias: &AliasEntryForSync) -> Result<(), Error> {
+    tx.execute(
+        "INSERT INTO aliases (alias_name, exercise_name, deleted, last_edited)
+         VALUES (:alias, :ex_name, :del, :le)
+         ON CONFLICT(alias_name) DO UPDATE SET
+           exercise_name = excluded.exercise_name, deleted = excluded.deleted, last_edited = excluded.last_edited
+         WHERE excluded.last_edited >= aliases.last_edited",
+        named_params! {
+            ":alias": alias.alias_name, ":ex_name": alias.exercise_name,
+            ":del": alias.deleted, ":le": alias.last_edited.to_rfc3339(),
+        }
+    ).map_err(|e| {
+        if let rusqlite::Error::SqliteFailure(ref err_info, _) = e {
+            // Primary key conflict is handled by ON CONFLICT. This catches other potential constraint errors.
+            if err_info.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_PRIMARYKEY {
+                // Should ideally not happen due to ON CONFLICT but as a fallback:
+                return Error::AliasAlreadyExists(alias.alias_name.clone());
+            }
+        }
+        Error::UpdateFailed(e)
+    })?;
+    Ok(())
+}
+
+pub fn upsert_bodyweight_entry(tx: &Transaction, bw: &BodyweightEntryForSync) -> Result<(), Error> {
+    tx.execute(
+        "INSERT INTO bodyweights (id, timestamp, weight, deleted, last_edited)
+         VALUES (:id, :ts, :w, :del, :le)
+         ON CONFLICT(id) DO UPDATE SET
+           timestamp = excluded.timestamp, weight = excluded.weight,
+           deleted = excluded.deleted, last_edited = excluded.last_edited
+         WHERE excluded.last_edited >= bodyweights.last_edited",
+        named_params! {
+            ":id": bw.id, ":ts": bw.timestamp.to_rfc3339(), ":w": bw.weight,
+            ":del": bw.deleted, ":le": bw.last_edited.to_rfc3339(),
+        }
+    ).map_err(|e| {
+        if let rusqlite::Error::SqliteFailure(ref err_info, Some(ref msg)) = e {
+            if err_info.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE && msg.contains("bodyweights.timestamp") {
+                return Error::BodyweightEntryExists(bw.timestamp.to_rfc3339());
+            }
+        }
+       Error::UpdateFailed(e)
+    })?;
+    Ok(())
 }
 

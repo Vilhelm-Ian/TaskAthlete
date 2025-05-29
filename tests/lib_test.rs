@@ -100,6 +100,7 @@ fn test_exercise_aliases() -> Result<()> {
 
     let result = service.create_alias(&ex_id.to_string(), "Squat"); // Alias conflicts with ID
     assert!(result.is_err());
+    println!("{:?}", result);
     assert!(result
         .unwrap_err()
         .to_string()
@@ -839,6 +840,7 @@ fn test_bodyweight_workouts() -> Result<()> {
     let naive_date = NaiveDate::from_ymd_opt(2023, 6, 2).unwrap();
     let naive_datetime = naive_date.and_hms_opt(0, 0, 0).unwrap();
     let day1: DateTime<Utc> = DateTime::from_naive_utc_and_offset(naive_datetime, Utc);
+    println!("body");
 
     // Add workout with additional weight
     service.add_workout(AddWorkoutParams {
@@ -854,6 +856,7 @@ fn test_bodyweight_workouts() -> Result<()> {
         implicit_muscles: None,
         bodyweight_to_use: Some(70.0), // Explicitly pass BW for test clarity
     })?;
+    println!("body");
 
     // Check that weight was calculated correctly
     let workouts = service.list_workouts(&WorkoutFilters {
@@ -1717,7 +1720,6 @@ fn get_all_dates_exercised() -> Result<()> {
     let today: DateTime<Utc> = DateTime::from_naive_utc_and_offset(naive_datetime, Utc);
     let yesterday = today - Duration::days(1);
     service.create_exercise("Bench Press", ExerciseType::Resistance, None, Some("chest"))?;
-
     // Helper
     let mut add_bench = |date: DateTime<Utc>| -> Result<()> {
         service.add_workout(AddWorkoutParams {
@@ -1835,10 +1837,12 @@ fn test_graph_data_fetching() -> Result<()> {
         distance: Some(5.5),
         ..Default::default()
     })?;
+    println!("here4");
 
     // Test E1RM
     let e1rm_data =
         service.get_data_for_graph("Bench Press", GraphType::Estimated1RM, None, None)?; // Added None, None
+    println!("here44");
     assert_eq!(
         e1rm_data,
         vec![
@@ -1847,6 +1851,7 @@ fn test_graph_data_fetching() -> Result<()> {
             (date_2023_10_28, 128.33333333333334)  // Use NaiveDate
         ]
     );
+    println!("here5");
 
     // Test Max Weight
     let weight_data =

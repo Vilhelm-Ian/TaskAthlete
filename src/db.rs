@@ -977,7 +977,7 @@ pub fn get_exercise_by_name(
 pub fn get_exercise_by_id(conn: &Connection, id: i64) -> Result<Option<ExerciseDefinition>, Error> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, name, type, muscles, log_weight, log_reps, log_duration, log_distance
+            "SELECT id, name, type, muscles, log_weight, log_reps, log_duration, log_distance, deleted, last_edited
              FROM exercises WHERE id = ?1 AND deleted = FALSE", 
         )
         .map_err(Error::QueryFailed)?;

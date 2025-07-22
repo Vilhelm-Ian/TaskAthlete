@@ -28,6 +28,8 @@ pub use config::{
     Theme,
     Units,
 };
+
+
 pub use db::{
     get_db_path as get_db_path_util,
     Error as DbError, // Renamed from DbError
@@ -156,7 +158,7 @@ pub struct AppService {
     pub config_path: PathBuf,
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Deserialize, Serialize)]
 pub struct SyncSummary {
     pub config: bool,
     pub exercises: usize,
@@ -164,6 +166,8 @@ pub struct SyncSummary {
     pub aliases: usize,
     pub bodyweights: usize,
 }
+
+
 
 
 impl AppService {
@@ -1190,7 +1194,8 @@ impl AppService {
             .context("Failed to list all muscles")
             .map_err(Into::into)
     }
-        pub fn get_last_sync_timestamp(&self) -> Option<DateTime<Utc>> {
+
+    pub fn get_last_sync_timestamp(&self) -> Option<DateTime<Utc>> {
         self.config.last_sync_timestamp
     }
 
@@ -1199,13 +1204,18 @@ impl AppService {
         self.save_config()
     }
 
-    fn get_server_url(&self, server_url_override: Option<String>) -> Result<String> {
+    pub fn get_server_url(&self, server_url_override: Option<String>) -> Result<String> {
         server_url_override
             .or_else(|| self.config.sync_server_url.clone())
             .ok_or_else(|| anyhow::anyhow!("Sync server URL not configured and no override provided."))
     }
 
-    async fn collect_local_changes(&self, since: Option<DateTime<Utc>>) -> Result<ChangesPayload> {
+    pub fn set_sync_server_url(&mut self, url: Option<String>) -> Result<(), ConfigError> {
+        self.config.sync_server_url = url.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        self.save_config()
+    }
+
+    pub fn collect_local_changes(&self, since: Option<DateTime<Utc>>) -> Result<ChangesPayload> {
         let config_path = self.get_config_path();
         let current_config_content = std::fs::read_to_string(config_path)
             .with_context(|| format!("Failed to read config file for sync: {:?}", config_path))?;
@@ -1216,7 +1226,7 @@ impl AppService {
             .context("Failed to get modification time for config file")?.into();
 
         let config_change = if since.map_or(true, |s_ts| config_mod_time > s_ts) {
-            Some(ConfigChange { // Use sync_client::ConfigChange or ensure types match
+            Some(ConfigChange {
                 content: current_config_content,
                 last_edited: config_mod_time,
             })
@@ -1237,7 +1247,7 @@ impl AppService {
         })
     }
 
-    async fn apply_server_changes(&mut self, changes: ChangesPayload) -> Result<SyncSummary> {
+    pub fn apply_server_changes(&mut self, changes: ChangesPayload) -> Result<SyncSummary> {
         let mut summary = SyncSummary::default();
         let local_config_path = self.get_config_path().to_path_buf();
         let tx = self.conn.transaction().context("Failed to start transaction for applying server changes")?;
@@ -1246,18 +1256,15 @@ impl AppService {
             let local_config_mod_time: DateTime<Utc> = std::fs::metadata(&local_config_path)
                 .and_then(|m| m.modified())
                 .map(Into::into)
-                .unwrap_or_else(|_| Utc.timestamp_opt(0,0).unwrap()); // If file doesn't exist, treat as very old
+                .unwrap_or_else(|_| Utc.timestamp_opt(0,0).unwrap());
 
             if server_config_change.last_edited > local_config_mod_time {
                 let new_config_from_server: Config = toml::from_str(&server_config_change.content)
                     .context("Failed to parse server config content")?;
                 
-                // Preserve client-only or sensitive fields if any, or merge carefully.
-                // For now, assume server config is authoritative for shared fields.
-                // The `last_sync_timestamp` should NOT be overwritten by server's config.
                 let old_last_sync = self.config.last_sync_timestamp;
                 self.config = new_config_from_server;
-                self.config.last_sync_timestamp = old_last_sync; // Preserve this crucial client-side state
+                self.config.last_sync_timestamp = old_last_sync;
 
                 config::save(&local_config_path, &self.config).context("Failed to save synced config")?;
                 println!("Applied server config changes.");
@@ -1286,38 +1293,6 @@ impl AppService {
         
         tx.commit().context("Failed to commit transaction for server changes")?;
         Ok(summary)
-    }
-
-    pub async fn perform_sync(&mut self, server_url_override: Option<String>) -> Result<(SyncSummary, SyncSummary)> {
-        let server_url = self.get_server_url(server_url_override)?;
-        let client = sync_client::SyncClient::new(server_url.clone());
-        let last_sync_ts = self.get_last_sync_timestamp();
-
-        println!("Collecting local changes since {:?}...", last_sync_ts);
-        let local_changes = self.collect_local_changes(last_sync_ts).await
-            .context("Failed to collect local changes")?;
-        
-        let summary_sent = SyncSummary {
-            config: local_changes.config.is_some(),
-            exercises: local_changes.exercises.len(),
-            workouts: local_changes.workouts.len(),
-            aliases: local_changes.aliases.len(),
-            bodyweights: local_changes.bodyweights.len(),
-        };
-
-        println!("Pushing changes to server: {}...", server_url);
-        let server_response = client.push_and_pull_changes(last_sync_ts, local_changes).await
-            .context("Sync communication with server failed")?;
-
-        println!("Applying server changes...");
-        let summary_received = self.apply_server_changes(server_response.data_to_client).await
-            .context("Failed to apply server changes")?;
-        
-        self.set_last_sync_timestamp(server_response.server_current_ts)
-            .context("Failed to update last sync timestamp in config")?;
-        
-        println!("Local database and config updated with server changes.");
-        Ok((summary_sent, summary_received))
     }
 }
 

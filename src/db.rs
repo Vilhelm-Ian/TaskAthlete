@@ -458,6 +458,7 @@ pub struct NewWorkoutData<'a> {
 pub fn add_workout(conn: &Connection, data: &NewWorkoutData) -> Result<i64, Error> {
     let timestamp_str = data.timestamp.to_rfc3339();
     let sets_val = data.sets.unwrap_or(1);
+    let now_str = Utc::now().to_rfc3339();
 
     conn.execute(
         "INSERT INTO workouts (timestamp, exercise_name, sets, reps, weight, duration_minutes, distance, bodyweight, notes, last_edited)
@@ -472,7 +473,7 @@ pub fn add_workout(conn: &Connection, data: &NewWorkoutData) -> Result<i64, Erro
             ":distance": data.distance,
             ":bw": data.bodyweight_to_use,
             ":notes": data.notes,
-            ":last_edited": timestamp_str, 
+            ":last_edited": now_str,timestamp_str 
         },
     ).map_err(Error::InsertFailed)?;
     Ok(conn.last_insert_rowid())
@@ -1229,9 +1230,10 @@ pub fn add_bodyweight(
     weight: f64,
 ) -> Result<i64, Error> {
     let timestamp_str = timestamp.to_rfc3339();
+    let now_str = Utc::now().to_rfc3339();
     conn.execute(
         "INSERT INTO bodyweights (timestamp, weight, last_edited) VALUES (?1, ?2, ?3)",
-        params![timestamp_str, weight, timestamp_str], 
+        params![timestamp_str, weight, now_str], 
     )
     .map_err(|e| {
         if let rusqlite::Error::SqliteFailure(

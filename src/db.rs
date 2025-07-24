@@ -473,7 +473,7 @@ pub fn add_workout(conn: &Connection, data: &NewWorkoutData) -> Result<i64, Erro
             ":distance": data.distance,
             ":bw": data.bodyweight_to_use,
             ":notes": data.notes,
-            ":last_edited": now_str,timestamp_str 
+            ":last_edited": now_str
         },
     ).map_err(Error::InsertFailed)?;
     Ok(conn.last_insert_rowid())

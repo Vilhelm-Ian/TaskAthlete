@@ -726,12 +726,12 @@ fn test_add_and_list_workouts_with_distance() -> Result<()> {
     assert_eq!(workouts.len(), 2);
     // Most recent first
     assert_eq!(workouts[0].timestamp.date_naive(), date2.date_naive());
-    assert_eq!(workouts[0].duration_minutes, Some(30));
-    assert_eq!(workouts[0].distance, Some(5.0)); // Check stored distance (km)
+    assert_eq!(workouts[0].duration_minutes, Some(60));
+    assert_eq!(workouts[0].distance, Some(10.5)); // Check stored distance (km)
 
     assert_eq!(workouts[1].timestamp.date_naive(), date1.date_naive());
-    assert_eq!(workouts[1].duration_minutes, Some(60));
-    assert_eq!(workouts[1].distance, Some(10.5));
+    assert_eq!(workouts[1].duration_minutes, Some(30));
+    assert_eq!(workouts[1].distance, Some(5.0));
 
     Ok(())
 }

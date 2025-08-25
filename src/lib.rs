@@ -813,6 +813,7 @@ impl AppService {
         let new_distance_km = self.convert_distance_input_to_km(params.new_distance_arg);
 
         let workout_updates = Workout {
+            _id: None,
             id: params.id,
             sets: params.new_sets,
             reps: params.new_reps,
@@ -1368,4 +1369,3 @@ fn calculate_effective_weight(
         _ => additional_weight, 
     }
 }
-

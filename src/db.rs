@@ -2,6 +2,7 @@ use anyhow::Result as AnyhowResult; // Use AnyhowResult alias where needed to av
 use chrono::{DateTime, NaiveDate, Utc};
 use rusqlite::{named_params, params, Connection, OptionalExtension, Row, ToSql};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 use std::collections::{HashMap, HashSet};
 use std::error::Error as StdError; // Use alias for standard Error trait
 use std::fmt;
@@ -84,6 +85,7 @@ impl fmt::Display for ExerciseType {
 pub struct AliasEntryForSync {
     pub alias_name: String,
     pub exercise_name: String, // Canonical name it points to
+    pub _id: Option<String>,
     pub deleted: bool,
     pub last_edited: DateTime<Utc>,
 }
@@ -91,6 +93,7 @@ pub struct AliasEntryForSync {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct BodyweightEntryForSync {
     pub id: i64,
+    pub _id: Option<String>,
     pub timestamp: DateTime<Utc>, // Actual measurement time
     pub weight: f64,
     pub deleted: bool,
@@ -235,6 +238,7 @@ fn map_collect_error(e: rusqlite::Error) -> Error {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Workout {
     pub id: i64,
+    pub _id: Option<String>,
     pub timestamp: DateTime<Utc>,
     pub exercise_name: String, // Always the canonical name
     pub sets: Option<i64>,
@@ -263,6 +267,7 @@ impl Workout {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExerciseDefinition {
     pub id: i64,
+    pub _id: Option<String>,
     pub name: String,
     pub type_: ExerciseType,
     pub muscles: Option<String>,
@@ -347,6 +352,33 @@ fn add_last_edited_column_if_not_exists(conn: &Connection, table_name: &str) -> 
     Ok(())
 }
 
+/// Adds an '_id' TEXT UNIQUE column to the specified table if it doesn't exist.
+/// For existing rows, populate it with generated UUIDs.
+fn add__id_column_if_not_exists(conn: &Connection, table_name: &str) -> Result<(), Error> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table_name})"))?;
+    let column_exists = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .any(|col_res| col_res.map_or(false, |col| col == "_id"));
+
+    if !column_exists {
+        println!("Adding '_id' column to {table_name} table...");
+        conn.execute(&format!("ALTER TABLE {table_name} ADD COLUMN _id TEXT"), [])?;
+
+        // Populate existing rows with unique UUIDs where _id is NULL or empty.
+        let mut sel_stmt = conn.prepare(&format!("SELECT rowid FROM {table_name} WHERE _id IS NULL OR _id = ''"))?;
+        let rows: Vec<i64> = sel_stmt
+            .query_map([], |r| r.get::<_, i64>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let mut upd_stmt = conn.prepare(&format!("UPDATE {table_name} SET _id = ?1 WHERE rowid = ?2"))?;
+        for rowid in rows {
+            let uuid_str = Uuid::new_v4().to_string();
+            upd_stmt.execute(params![uuid_str, rowid])?;
+        }
+    }
+    Ok(())
+}
+
 
 pub fn init(conn: &Connection) -> Result<(), Error> {
     conn.execute_batch(
@@ -414,6 +446,12 @@ pub fn init(conn: &Connection) -> Result<(), Error> {
     add_last_edited_column_if_not_exists(conn, "aliases")?;
     add_last_edited_column_if_not_exists(conn, "bodyweights")?;
 
+    // Ensure the new '_id' column exists and is populated for existing rows.
+    add__id_column_if_not_exists(conn, "exercises")?;
+    add__id_column_if_not_exists(conn, "workouts")?;
+    add__id_column_if_not_exists(conn, "aliases")?;
+    add__id_column_if_not_exists(conn, "bodyweights")?;
+
     Ok(())
 }
 
@@ -459,11 +497,12 @@ pub fn add_workout(conn: &Connection, data: &NewWorkoutData) -> Result<i64, Erro
     let timestamp_str = data.timestamp.to_rfc3339();
     let sets_val = data.sets.unwrap_or(1);
     let now_str = Utc::now().to_rfc3339();
-
+    let uuid_str = Uuid::new_v4().to_string();
     conn.execute(
-        "INSERT INTO workouts (timestamp, exercise_name, sets, reps, weight, duration_minutes, distance, bodyweight, notes, last_edited)
-         VALUES (:ts, :ex_name, :sets, :reps, :weight, :duration, :distance, :bw, :notes, :last_edited)", 
+        "INSERT INTO workouts (_id, timestamp, exercise_name, sets, reps, weight, duration_minutes, distance, bodyweight, notes, last_edited)
+         VALUES (:_id, :ts, :ex_name, :sets, :reps, :weight, :duration, :distance, :bw, :notes, :last_edited)", 
         named_params! {
+            ":_id": uuid_str,
             ":ts": timestamp_str,
             ":ex_name": data.exercise_name,
             ":sets": sets_val,
@@ -605,8 +644,14 @@ fn map_row_to_workout(row: &Row) -> Result<Workout, rusqlite::Error> {
         })
         .transpose()?; 
 
+    let _id_val = match row.get::<_, Option<String>>("_id") {
+        Ok(v) => v,
+        Err(_) => None,
+    };
+
     Ok(Workout {
         id: row.get("id")?,
+        _id: _id_val,
         timestamp,
         exercise_name: row.get("exercise_name")?,
         sets: row.get("sets")?,
@@ -746,11 +791,12 @@ pub fn create_exercise(
     let final_log_dur = log_duration.unwrap_or(default_log_dur);
     let final_log_dist = log_distance.unwrap_or(default_log_dist);
     let now_str = Utc::now().to_rfc3339();
-
+    let uuid_str = Uuid::new_v4().to_string();
     match conn.execute(
-        "INSERT INTO exercises (name, type, muscles, log_weight, log_reps, log_duration, log_distance, last_edited)
-         VALUES (:name, :type, :muscles, :log_w, :log_r, :log_dur, :log_dist, :last_edited)",
+        "INSERT INTO exercises (_id, name, type, muscles, log_weight, log_reps, log_duration, log_distance, last_edited)
+         VALUES (:_id, :name, :type, :muscles, :log_w, :log_r, :log_dur, :log_dist, :last_edited)",
         named_params! {
+            ":_id": uuid_str,
             ":name": name,
             ":type": type_str,
             ":muscles": muscles,
@@ -924,8 +970,14 @@ fn map_row_to_exercise_definition(row: &Row) -> Result<ExerciseDefinition, rusql
             Box::new(Error::Conversion(format!("Invalid exercise type '{type_str}' from DB")))
                 as Box<dyn StdError + Send + Sync>)
     })?;
+    let _id_val = match row.get::<_, Option<String>>("_id") {
+        Ok(v) => v,
+        Err(_) => None,
+    };
+
     Ok(ExerciseDefinition {
         id: row.get("id")?,
+        _id: _id_val,
         name: row.get("name")?,
         type_: ex_type,
         muscles: row.get("muscles")?,
@@ -940,17 +992,27 @@ fn map_row_to_exercise_definition(row: &Row) -> Result<ExerciseDefinition, rusql
 
 
 fn map_row_to_alias_entry_for_sync(row: &Row) -> Result<AliasEntryForSync, rusqlite::Error> {
+    let _id_val = match row.get::<_, Option<String>>("_id") {
+        Ok(v) => v,
+        Err(_) => None,
+    };
     Ok(AliasEntryForSync {
         alias_name: row.get("alias_name")?,
         exercise_name: row.get("exercise_name")?,
+        _id: _id_val,
         deleted: row.get("deleted")?,
         last_edited: parse_datetime_from_string(row.get("last_edited")?)?,
     })
 }
 
 fn map_row_to_bodyweight_entry_for_sync(row: &Row) -> Result<BodyweightEntryForSync, rusqlite::Error> {
+    let _id_val = match row.get::<_, Option<String>>("_id") {
+        Ok(v) => v,
+        Err(_) => None,
+    };
     Ok(BodyweightEntryForSync {
         id: row.get("id")?,
+        _id: _id_val,
         timestamp: parse_datetime_from_string(row.get("timestamp")?)?, // This is measurement time
         weight: row.get("weight")?,
         deleted: row.get("deleted")?,
@@ -965,7 +1027,7 @@ pub fn get_exercise_by_name(
 ) -> Result<Option<ExerciseDefinition>, Error> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, name, type, muscles, log_weight, log_reps, log_duration, log_distance, deleted, last_edited
+            "SELECT id, _id, name, type, muscles, log_weight, log_reps, log_duration, log_distance, deleted, last_edited
              FROM exercises WHERE name = ?1 COLLATE NOCASE AND deleted = FALSE", 
         )
         .map_err(Error::QueryFailed)?;
@@ -978,7 +1040,7 @@ pub fn get_exercise_by_name(
 pub fn get_exercise_by_id(conn: &Connection, id: i64) -> Result<Option<ExerciseDefinition>, Error> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, name, type, muscles, log_weight, log_reps, log_duration, log_distance, deleted, last_edited
+            "SELECT id, _id, name, type, muscles, log_weight, log_reps, log_duration, log_distance, deleted, last_edited
              FROM exercises WHERE id = ?1 AND deleted = FALSE", 
         )
         .map_err(Error::QueryFailed)?;
@@ -993,9 +1055,11 @@ pub fn create_alias(
     canonical_exercise_name: &str,
 ) -> Result<(), Error> {
     let now_str = Utc::now().to_rfc3339();
+    let uuid_str = Uuid::new_v4().to_string();
     match conn.execute(
-        "INSERT INTO aliases (alias_name, exercise_name, last_edited) VALUES (:alias, :ex_name, :last_edited)",
+        "INSERT INTO aliases (_id, alias_name, exercise_name, last_edited) VALUES (:_id, :alias, :ex_name, :last_edited)",
         named_params! {
+            ":_id": uuid_str,
             ":alias": alias_name,
             ":ex_name": canonical_exercise_name,
             ":last_edited": now_str,
@@ -1231,9 +1295,10 @@ pub fn add_bodyweight(
 ) -> Result<i64, Error> {
     let timestamp_str = timestamp.to_rfc3339();
     let now_str = Utc::now().to_rfc3339();
+    let uuid_str = Uuid::new_v4().to_string();
     conn.execute(
-        "INSERT INTO bodyweights (timestamp, weight, last_edited) VALUES (?1, ?2, ?3)",
-        params![timestamp_str, weight, now_str], 
+        "INSERT INTO bodyweights (_id, timestamp, weight, last_edited) VALUES (?1, ?2, ?3, ?4)",
+        params![uuid_str, timestamp_str, weight, now_str], 
     )
     .map_err(|e| {
         if let rusqlite::Error::SqliteFailure(
@@ -1431,7 +1496,7 @@ fn parse_datetime_from_string(s: String) -> Result<DateTime<Utc>, rusqlite::Erro
 
 
 pub fn get_exercises_modified_since(conn: &Connection, since: Option<DateTime<Utc>>) -> Result<Vec<ExerciseDefinition>, Error> {
-    let mut query = "SELECT id, name, type, muscles, log_weight, log_reps, log_duration, log_distance, deleted, last_edited FROM exercises".to_string();
+    let mut query = "SELECT id, _id, name, type, muscles, log_weight, log_reps, log_duration, log_distance, deleted, last_edited FROM exercises".to_string();
     let mut params_vec: Vec<Box<dyn ToSql>> = Vec::new();
     if let Some(since_ts) = since {
         query.push_str(" WHERE last_edited > ?1");
@@ -1448,7 +1513,7 @@ pub fn get_exercises_modified_since(conn: &Connection, since: Option<DateTime<Ut
 }
 
 pub fn get_workouts_modified_since(conn: &Connection, since: Option<DateTime<Utc>>) -> Result<Vec<Workout>, Error> {
-    let mut query = "SELECT w.id, w.timestamp, w.exercise_name, w.sets, w.reps, w.weight, w.duration_minutes, w.distance, w.bodyweight, w.notes, e.type, w.deleted, w.last_edited 
+    let mut query = "SELECT w.id, w._id, w.timestamp, w.exercise_name, w.sets, w.reps, w.weight, w.duration_minutes, w.distance, w.bodyweight, w.notes, e.type, w.deleted, w.last_edited 
                      FROM workouts w LEFT JOIN exercises e ON w.exercise_name = e.name COLLATE NOCASE".to_string(); // Added COLLATE NOCASE
     let mut params_vec: Vec<Box<dyn ToSql>> = Vec::new();
     if let Some(since_ts) = since {
@@ -1466,7 +1531,7 @@ pub fn get_workouts_modified_since(conn: &Connection, since: Option<DateTime<Utc
 }
 
 pub fn get_aliases_modified_since(conn: &Connection, since: Option<DateTime<Utc>>) -> Result<Vec<AliasEntryForSync>, Error> {
-    let mut query = "SELECT alias_name, exercise_name, deleted, last_edited FROM aliases".to_string();
+    let mut query = "SELECT _id, alias_name, exercise_name, deleted, last_edited FROM aliases".to_string();
     let mut params_vec: Vec<Box<dyn ToSql>> = Vec::new();
     if let Some(since_ts) = since {
         query.push_str(" WHERE last_edited > ?1");
@@ -1483,7 +1548,7 @@ pub fn get_aliases_modified_since(conn: &Connection, since: Option<DateTime<Utc>
 }
 
 pub fn get_bodyweights_modified_since(conn: &Connection, since: Option<DateTime<Utc>>) -> Result<Vec<BodyweightEntryForSync>, Error> {
-    let mut query = "SELECT id, timestamp, weight, deleted, last_edited FROM bodyweights".to_string();
+    let mut query = "SELECT id, _id, timestamp, weight, deleted, last_edited FROM bodyweights".to_string();
     let mut params_vec: Vec<Box<dyn ToSql>> = Vec::new();
     if let Some(since_ts) = since {
         query.push_str(" WHERE last_edited > ?1");
@@ -1589,4 +1654,3 @@ pub fn upsert_bodyweight_entry(tx: &Transaction, bw: &BodyweightEntryForSync) ->
     })?;
     Ok(())
 }
-

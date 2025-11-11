@@ -13,6 +13,8 @@ jobs:
     steps:
       - name: Checkout TaskAthleteGUI
         uses: actions/checkout@v4
+        with:
+          path: TaskAthleteGUI
 
       - name: Checkout TaskAthlete library
         uses: actions/checkout@v4
@@ -34,23 +36,19 @@ jobs:
           api-level: 34
           ndk-version: 27.0.12077973
 
-      - name: Install dependencies
+      - name: Add Android Rust targets
         run: |
-          npm ci
           rustup target add aarch64-linux-android
+          rustup target add armv7-linux-androideabi
 
-      - name: Link TaskAthlete library
+      - name: Install dependencies and build
         run: |
-          # adjust path if your tauri.conf.json or vite config expects something else
-          mkdir -p src/lib
-          cp -r TaskAthlete/src/* src/lib/
-
-      - name: Build Tauri Android Debug APK
-        run: |
+          cd TaskAthleteGUI
+          npm install
           npx tauri android build --debug
 
       - name: Upload built APK
         uses: actions/upload-artifact@v4
         with:
           name: taskathletegui-debug-apk
-          path: src-tauri/gen/android/app/build/outputs/apk/debug/*.apk
+          path: TaskAthleteGUI/src-tauri/gen/android/app/build/outputs/apk/debug/*.apk

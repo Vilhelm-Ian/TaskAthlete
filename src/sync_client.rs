@@ -46,7 +46,7 @@ pub struct Workout {
     pub sets: Option<i64>,
     pub reps: Option<i64>,
     pub weight: Option<f64>,
-    pub duration_minutes: Option<i64>,
+    pub duration_seconds: Option<i64>,
     pub bodyweight: Option<f64>,
     pub distance: Option<f64>,
     pub notes: Option<String>,

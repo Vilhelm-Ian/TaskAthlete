@@ -133,7 +133,7 @@ impl PBInfo {
 pub struct PersonalBests {
     pub max_weight: Option<f64>,
     pub max_reps: Option<i64>,
-    pub max_duration_minutes: Option<i64>,
+    pub max_duration_seconds: Option<i64>,
     pub max_distance_km: Option<f64>, // Always store in km
 }
 
@@ -818,7 +818,7 @@ impl AppService {
             sets: params.new_sets,
             reps: params.new_reps,
             weight: params.new_weight,
-            duration_minutes: params.new_duration,
+            duration_seconds: params.new_duration,
             bodyweight: params.new_bodyweight,
             distance: new_distance_km,
             notes: params.new_notes,
@@ -972,7 +972,7 @@ impl AppService {
         let personal_bests = PersonalBests {
             max_weight: db::get_max_effective_weight_for_exercise(&self.conn, &canonical_name)?,
             max_reps: db::get_max_reps_for_exercise(&self.conn, &canonical_name)?,
-            max_duration_minutes: db::get_max_duration_for_exercise(&self.conn, &canonical_name)?,
+            max_duration_seconds: db::get_max_duration_for_exercise(&self.conn, &canonical_name)?,
             max_distance_km: db::get_max_distance_for_exercise(&self.conn, &canonical_name)?,
         };
 
@@ -1153,7 +1153,7 @@ impl AppService {
                     }
                 }
                 GraphType::WorkoutDuration => {
-                    if let Some(d) = w.duration_minutes.filter(|&dur| dur > 0) {
+                    if let Some(d) = w.duration_seconds.filter(|&dur| dur > 0) {
                         *entry += d as f64;
                     }
                 }

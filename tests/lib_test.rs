@@ -300,7 +300,7 @@ fn test_add_workout_past_date() -> Result<()> {
         ..Default::default()
     })?;
     assert_eq!(workouts_yesterday.len(), 1);
-    assert_eq!(workouts_yesterday[0].duration_minutes, Some(30));
+    assert_eq!(workouts_yesterday[0].duration_seconds, Some(30));
     assert_eq!(
         workouts_yesterday[0].timestamp.date_naive(),
         yesterday.date_naive()
@@ -312,7 +312,7 @@ fn test_add_workout_past_date() -> Result<()> {
         ..Default::default()
     })?;
     assert_eq!(workouts_two_days_ago.len(), 1);
-    assert_eq!(workouts_two_days_ago[0].duration_minutes, Some(25));
+    assert_eq!(workouts_two_days_ago[0].duration_seconds, Some(25));
     assert_eq!(
         workouts_two_days_ago[0].timestamp.date_naive(),
         two_days_ago.date_naive()
@@ -726,11 +726,11 @@ fn test_add_and_list_workouts_with_distance() -> Result<()> {
     assert_eq!(workouts.len(), 2);
     // Most recent first
     assert_eq!(workouts[0].timestamp.date_naive(), date2.date_naive());
-    assert_eq!(workouts[0].duration_minutes, Some(60));
+    assert_eq!(workouts[0].duration_seconds, Some(60));
     assert_eq!(workouts[0].distance, Some(10.5)); // Check stored distance (km)
 
     assert_eq!(workouts[1].timestamp.date_naive(), date1.date_naive());
-    assert_eq!(workouts[1].duration_minutes, Some(30));
+    assert_eq!(workouts[1].duration_seconds, Some(30));
     assert_eq!(workouts[1].distance, Some(5.0));
 
     Ok(())
@@ -1484,7 +1484,7 @@ fn test_exercise_stats() -> Result<()> {
     // PBs
     assert_eq!(stats_daily.personal_bests.max_weight, Some(55.0));
     assert_eq!(stats_daily.personal_bests.max_reps, Some(12));
-    assert_eq!(stats_daily.personal_bests.max_duration_minutes, Some(12));
+    assert_eq!(stats_daily.personal_bests.max_duration_seconds, Some(12));
     assert_eq!(stats_daily.personal_bests.max_distance_km, Some(5.5));
 
     // --- Test with 2-day streak interval ---
@@ -2038,7 +2038,7 @@ fn test_log_flag_restrictions() -> Result<()> {
         ..Default::default()
     })?;
     assert_eq!(workouts.len(), 1);
-    assert_eq!(workouts[0].duration_minutes, Some(60));
+    assert_eq!(workouts[0].duration_seconds, Some(60));
     assert_eq!(workouts[0].bodyweight, Some(bodyweight_val));
     assert!(workouts[0].weight.is_none()); // Check restricted fields are None
     assert!(workouts[0].reps.is_none());

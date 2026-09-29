@@ -244,7 +244,7 @@ pub struct Workout {
     pub sets: Option<i64>,
     pub reps: Option<i64>,
     pub weight: Option<f64>,
-    pub duration_minutes: Option<i64>,
+    pub duration_seconds: Option<i64>,
     pub bodyweight: Option<f64>,
     pub distance: Option<f64>,
     pub notes: Option<String>,
@@ -402,7 +402,7 @@ pub fn init(conn: &Connection) -> Result<(), Error> {
             sets INTEGER,
             reps INTEGER,
             weight REAL,
-            duration_minutes INTEGER,
+            duration_seconds INTEGER,
             distance REAL,
             bodyweight REAL, 
             notes TEXT,
@@ -431,6 +431,7 @@ pub fn init(conn: &Connection) -> Result<(), Error> {
 
     add_bodyweight_column_if_not_exists(conn)?;
     add_distance_column_if_not_exists(conn)?;
+    migrate_duration_minutes_to_seconds_if_needed(conn)?;
     add_log_flag_column_if_not_exists(conn, "log_weight", 1)?;
     add_log_flag_column_if_not_exists(conn, "log_reps", 1)?;
     add_log_flag_column_if_not_exists(conn, "log_duration", 0)?;
@@ -481,6 +482,31 @@ fn add_bodyweight_column_if_not_exists(conn: &Connection) -> Result<(), Error> {
     Ok(())
 }
 
+/// Migrates the legacy `duration_minutes` column to `duration_seconds`.
+/// Existing values are assumed to be whole minutes and are multiplied by 60.
+fn migrate_duration_minutes_to_seconds_if_needed(conn: &Connection) -> Result<(), Error> {
+    let columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(workouts)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<_, _>>()?;
+
+    let has_minutes = columns.iter().any(|c| c == "duration_minutes");
+    let has_seconds = columns.iter().any(|c| c == "duration_seconds");
+
+    if has_minutes && !has_seconds {
+        println!("Migrating 'duration_minutes' column to 'duration_seconds' (values x60)...");
+        conn.execute(
+            "ALTER TABLE workouts RENAME COLUMN duration_minutes TO duration_seconds",
+            [],
+        )?;
+        conn.execute(
+            "UPDATE workouts SET duration_seconds = duration_seconds * 60 WHERE duration_seconds IS NOT NULL",
+            [],
+        )?;
+    }
+    Ok(())
+}
+
 pub struct NewWorkoutData<'a> {
     pub exercise_name: &'a str, 
     pub timestamp: DateTime<Utc>,
@@ -499,7 +525,7 @@ pub fn add_workout(conn: &Connection, data: &NewWorkoutData) -> Result<i64, Erro
     let now_str = Utc::now().to_rfc3339();
     let uuid_str = Uuid::new_v4().to_string();
     conn.execute(
-        "INSERT INTO workouts (_id, timestamp, exercise_name, sets, reps, weight, duration_minutes, distance, bodyweight, notes, last_edited)
+        "INSERT INTO workouts (_id, timestamp, exercise_name, sets, reps, weight, duration_seconds, distance, bodyweight, notes, last_edited)
          VALUES (:_id, :ts, :ex_name, :sets, :reps, :weight, :duration, :distance, :bw, :notes, :last_edited)", 
         named_params! {
             ":_id": uuid_str,
@@ -529,7 +555,7 @@ pub fn update_workout(
         sets: new_sets,
         reps: new_reps,
         weight: new_weight,
-        duration_minutes: new_duration,
+        duration_seconds: new_duration,
         distance: new_distance,
         bodyweight: new_bodyweight, 
         notes: new_notes,
@@ -556,7 +582,7 @@ pub fn update_workout(
         params_map.insert(":weight".into(), Box::new(new_weight));
     }
     if new_duration.is_some() {
-        updates.push("duration_minutes = :duration");
+        updates.push("duration_seconds = :duration");
         params_map.insert(":duration".into(), Box::new(new_duration));
     }
     if new_distance.is_some() {
@@ -657,7 +683,7 @@ fn map_row_to_workout(row: &Row) -> Result<Workout, rusqlite::Error> {
         sets: row.get("sets")?,
         reps: row.get("reps")?,
         weight: row.get("weight")?,
-        duration_minutes: row.get("duration_minutes")?,
+        duration_seconds: row.get("duration_seconds")?,
         distance: row.get("distance")?,
         bodyweight: row.get("bodyweight")?,
         notes: row.get("notes")?,
@@ -681,7 +707,7 @@ pub fn list_workouts_filtered(
     conn: &Connection,
     filters: &WorkoutFilters,
 ) -> Result<Vec<Workout>, Error> {
-    let mut sql = "SELECT w.id, w.timestamp, w.exercise_name, w.sets, w.reps, w.weight, w.duration_minutes, w.distance, w.bodyweight, w.notes, e.type, w.deleted, w.last_edited 
+    let mut sql = "SELECT w.id, w.timestamp, w.exercise_name, w.sets, w.reps, w.weight, w.duration_seconds, w.distance, w.bodyweight, w.notes, e.type, w.deleted, w.last_edited 
                    FROM workouts w LEFT JOIN exercises e ON w.exercise_name = e.name 
                    WHERE w.deleted = FALSE AND (e.id IS NULL OR e.deleted = FALSE)".to_string(); 
     let mut params_map: HashMap<String, Box<dyn ToSql>> = HashMap::new();
@@ -750,7 +776,7 @@ pub fn list_workouts_for_exercise_on_nth_last_day(
                     WHERE exercise_name = :ex_name COLLATE NOCASE AND deleted = FALSE
                     ORDER BY workout_date DESC LIMIT 1 OFFSET :offset
                 )
-                SELECT w.id, w.timestamp, w.exercise_name, w.sets, w.reps, w.weight, w.duration_minutes, w.distance, w.bodyweight, w.notes, e.type,  w.deleted, w.last_edited
+                SELECT w.id, w.timestamp, w.exercise_name, w.sets, w.reps, w.weight, w.duration_seconds, w.distance, w.bodyweight, w.notes, e.type,  w.deleted, w.last_edited
                 FROM workouts w
                 LEFT JOIN exercises e ON w.exercise_name = e.name
                 JOIN RankedDays rd ON date(w.timestamp) = rd.workout_date
@@ -1242,8 +1268,8 @@ pub fn get_max_duration_for_exercise(
     canonical_exercise_name: &str,
 ) -> Result<Option<i64>, Error> {
     conn.query_row(
-        "SELECT MAX(duration_minutes) FROM workouts w JOIN exercises e ON w.exercise_name = e.name COLLATE NOCASE
-         WHERE w.exercise_name = ?1 COLLATE NOCASE AND duration_minutes IS NOT NULL AND w.deleted = FALSE AND e.deleted = FALSE", 
+        "SELECT MAX(duration_seconds) FROM workouts w JOIN exercises e ON w.exercise_name = e.name COLLATE NOCASE
+         WHERE w.exercise_name = ?1 COLLATE NOCASE AND duration_seconds IS NOT NULL AND w.deleted = FALSE AND e.deleted = FALSE", 
         params![canonical_exercise_name], |row| row.get(0),
     ).optional().map_err(Error::QueryFailed).map(Option::flatten)
 }
@@ -1513,7 +1539,7 @@ pub fn get_exercises_modified_since(conn: &Connection, since: Option<DateTime<Ut
 }
 
 pub fn get_workouts_modified_since(conn: &Connection, since: Option<DateTime<Utc>>) -> Result<Vec<Workout>, Error> {
-    let mut query = "SELECT w.id, w._id, w.timestamp, w.exercise_name, w.sets, w.reps, w.weight, w.duration_minutes, w.distance, w.bodyweight, w.notes, e.type, w.deleted, w.last_edited 
+    let mut query = "SELECT w.id, w._id, w.timestamp, w.exercise_name, w.sets, w.reps, w.weight, w.duration_seconds, w.distance, w.bodyweight, w.notes, e.type, w.deleted, w.last_edited 
                      FROM workouts w LEFT JOIN exercises e ON w.exercise_name = e.name COLLATE NOCASE".to_string(); // Added COLLATE NOCASE
     let mut params_vec: Vec<Box<dyn ToSql>> = Vec::new();
     if let Some(since_ts) = since {
@@ -1566,15 +1592,15 @@ pub fn get_bodyweights_modified_since(conn: &Connection, since: Option<DateTime<
 
 pub fn upsert_exercise(tx: &Transaction, ex: &ExerciseDefinition) -> Result<(), Error> {
     tx.execute(
-        "INSERT INTO exercises (id, name, type, muscles, log_weight, log_reps, log_duration, log_distance, deleted, last_edited)
-         VALUES (:id, :name, :type, :muscles, :lw, :lr, :ldu, :ldi, :del, :le)
+        "INSERT INTO exercises (id, _id, name, type, muscles, log_weight, log_reps, log_duration, log_distance, deleted, last_edited)
+         VALUES (:id, :_id, :name, :type, :muscles, :lw, :lr, :ldu, :ldi, :del, :le)
          ON CONFLICT(id) DO UPDATE SET
-           name = excluded.name, type = excluded.type, muscles = excluded.muscles,
+           _id = excluded._id, name = excluded.name, type = excluded.type, muscles = excluded.muscles,
            log_weight = excluded.log_weight, log_reps = excluded.log_reps, log_duration = excluded.log_duration,
            log_distance = excluded.log_distance, deleted = excluded.deleted, last_edited = excluded.last_edited
          WHERE excluded.last_edited >= exercises.last_edited",
         named_params! {
-            ":id": ex.id, ":name": ex.name, ":type": ex.type_.to_string(), ":muscles": ex.muscles,
+            ":id": ex.id, ":_id": ex._id, ":name": ex.name, ":type": ex.type_.to_string(), ":muscles": ex.muscles,
             ":lw": ex.log_weight, ":lr": ex.log_reps, ":ldu": ex.log_duration, ":ldi": ex.log_distance,
             ":del": ex.deleted, ":le": ex.last_edited.to_rfc3339(),
         }
@@ -1591,17 +1617,17 @@ pub fn upsert_exercise(tx: &Transaction, ex: &ExerciseDefinition) -> Result<(), 
 
 pub fn upsert_workout(tx: &Transaction, w: &Workout) -> Result<(), Error> {
     tx.execute(
-        "INSERT INTO workouts (id, timestamp, exercise_name, sets, reps, weight, duration_minutes, distance, bodyweight, notes, deleted, last_edited)
-         VALUES (:id, :ts, :ex_name, :sets, :reps, :w, :dur, :dist, :bw, :notes, :del, :le)
+        "INSERT INTO workouts (id, _id, timestamp, exercise_name, sets, reps, weight, duration_seconds, distance, bodyweight, notes, deleted, last_edited)
+         VALUES (:id, :_id, :ts, :ex_name, :sets, :reps, :w, :dur, :dist, :bw, :notes, :del, :le)
          ON CONFLICT(id) DO UPDATE SET
-           timestamp = excluded.timestamp, exercise_name = excluded.exercise_name, sets = excluded.sets,
-           reps = excluded.reps, weight = excluded.weight, duration_minutes = excluded.duration_minutes,
+           _id = excluded._id, timestamp = excluded.timestamp, exercise_name = excluded.exercise_name, sets = excluded.sets,
+           reps = excluded.reps, weight = excluded.weight, duration_seconds = excluded.duration_seconds,
            distance = excluded.distance, bodyweight = excluded.bodyweight, notes = excluded.notes,
            deleted = excluded.deleted, last_edited = excluded.last_edited
          WHERE excluded.last_edited >= workouts.last_edited",
         named_params! {
-            ":id": w.id, ":ts": w.timestamp.to_rfc3339(), ":ex_name": w.exercise_name, ":sets": w.sets,
-            ":reps": w.reps, ":w": w.weight, ":dur": w.duration_minutes, ":dist": w.distance,
+            ":id": w.id, ":_id": w._id, ":ts": w.timestamp.to_rfc3339(), ":ex_name": w.exercise_name, ":sets": w.sets,
+            ":reps": w.reps, ":w": w.weight, ":dur": w.duration_seconds, ":dist": w.distance,
             ":bw": w.bodyweight, ":notes": w.notes, ":del": w.deleted, ":le": w.last_edited.to_rfc3339(),
         }
     ).map_err(Error::UpdateFailed)?;
@@ -1610,20 +1636,18 @@ pub fn upsert_workout(tx: &Transaction, w: &Workout) -> Result<(), Error> {
 
 pub fn upsert_alias(tx: &Transaction, alias: &AliasEntryForSync) -> Result<(), Error> {
     tx.execute(
-        "INSERT INTO aliases (alias_name, exercise_name, deleted, last_edited)
-         VALUES (:alias, :ex_name, :del, :le)
+        "INSERT INTO aliases (_id, alias_name, exercise_name, deleted, last_edited)
+         VALUES (:_id, :alias, :ex_name, :del, :le)
          ON CONFLICT(alias_name) DO UPDATE SET
-           exercise_name = excluded.exercise_name, deleted = excluded.deleted, last_edited = excluded.last_edited
+           _id = excluded._id, exercise_name = excluded.exercise_name, deleted = excluded.deleted, last_edited = excluded.last_edited
          WHERE excluded.last_edited >= aliases.last_edited",
         named_params! {
-            ":alias": alias.alias_name, ":ex_name": alias.exercise_name,
+            ":_id": alias._id, ":alias": alias.alias_name, ":ex_name": alias.exercise_name,
             ":del": alias.deleted, ":le": alias.last_edited.to_rfc3339(),
         }
     ).map_err(|e| {
         if let rusqlite::Error::SqliteFailure(ref err_info, _) = e {
-            // Primary key conflict is handled by ON CONFLICT. This catches other potential constraint errors.
             if err_info.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_PRIMARYKEY {
-                // Should ideally not happen due to ON CONFLICT but as a fallback:
                 return Error::AliasAlreadyExists(alias.alias_name.clone());
             }
         }
@@ -1634,14 +1658,14 @@ pub fn upsert_alias(tx: &Transaction, alias: &AliasEntryForSync) -> Result<(), E
 
 pub fn upsert_bodyweight_entry(tx: &Transaction, bw: &BodyweightEntryForSync) -> Result<(), Error> {
     tx.execute(
-        "INSERT INTO bodyweights (id, timestamp, weight, deleted, last_edited)
-         VALUES (:id, :ts, :w, :del, :le)
+        "INSERT INTO bodyweights (id, _id, timestamp, weight, deleted, last_edited)
+         VALUES (:id, :_id, :ts, :w, :del, :le)
          ON CONFLICT(id) DO UPDATE SET
-           timestamp = excluded.timestamp, weight = excluded.weight,
+           _id = excluded._id, timestamp = excluded.timestamp, weight = excluded.weight,
            deleted = excluded.deleted, last_edited = excluded.last_edited
          WHERE excluded.last_edited >= bodyweights.last_edited",
         named_params! {
-            ":id": bw.id, ":ts": bw.timestamp.to_rfc3339(), ":w": bw.weight,
+            ":id": bw.id, ":_id": bw._id, ":ts": bw.timestamp.to_rfc3339(), ":w": bw.weight,
             ":del": bw.deleted, ":le": bw.last_edited.to_rfc3339(),
         }
     ).map_err(|e| {

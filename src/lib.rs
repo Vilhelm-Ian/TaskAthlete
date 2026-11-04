@@ -940,25 +940,32 @@ impl AppService {
             bail!(DbError::NoWorkoutDataFound(canonical_name));
         }
 
-        let first_ts = timestamps.first().expect("Timestamps non-empty");
-        let last_ts = timestamps.last().expect("Timestamps non-empty");
+        // Collapse the individual workout entries into distinct calendar days so that
+        // one day counts as one workout (multiple sets/entries on the same day count once).
+        // Timestamps are ordered chronologically, so same-day entries are adjacent.
+        let mut workout_days: Vec<NaiveDate> =
+            timestamps.iter().map(|ts| ts.date_naive()).collect();
+        workout_days.dedup();
 
-        let avg_workouts_per_week = if timestamps.len() <= 1 {
+        let first_day = *workout_days.first().expect("Workout days non-empty");
+        let last_day = *workout_days.last().expect("Workout days non-empty");
+
+        let avg_workouts_per_week = if workout_days.len() <= 1 {
             None
         } else {
-            let duration_days = (*last_ts - *first_ts).num_days();
+            let duration_days = (last_day - first_day).num_days();
             if duration_days <= 0 {
                 None
             } else {
                 let duration_weeks = (duration_days as f64 / 7.0).max(1.0 / 7.0);
-                Some(timestamps.len() as f64 / duration_weeks)
+                Some(workout_days.len() as f64 / duration_weeks)
             }
         };
 
-        let longest_gap_days: Option<u64> = if timestamps.len() > 1 {
-            timestamps
+        let longest_gap_days: Option<u64> = if workout_days.len() > 1 {
+            workout_days
                 .windows(2)
-                .map(|w| (w[1].date_naive() - w[0].date_naive()).num_days() - 1)
+                .map(|w| (w[1] - w[0]).num_days() - 1)
                 .filter(|&g| g >= 0)
                 .max()
                 .map(|g| g as u64)
@@ -978,9 +985,9 @@ impl AppService {
 
         Ok(ExerciseStats {
             canonical_name,
-            total_workouts: timestamps.len(),
-            first_workout_date: Some(first_ts.date_naive()),
-            last_workout_date: Some(last_ts.date_naive()),
+            total_workouts: workout_days.len(),
+            first_workout_date: Some(first_day),
+            last_workout_date: Some(last_day),
             avg_workouts_per_week,
             longest_gap_days,
             personal_bests,

@@ -1541,6 +1541,56 @@ fn test_exercise_stats() -> Result<()> {
 }
 
 #[test]
+fn test_exercise_stats_counts_distinct_days() -> Result<()> {
+    let mut service = create_test_service()?;
+    service.create_exercise("Multi Set", ExerciseType::Resistance, None, None)?;
+
+    let add = |service: &mut AppService,
+               day: NaiveDate,
+               hour: u32,
+               reps: i64|
+     -> Result<()> {
+        let naive_datetime = day.and_hms_opt(hour, 0, 0).unwrap();
+        let date: DateTime<Utc> = DateTime::from_naive_utc_and_offset(naive_datetime, Utc);
+        service.add_workout(AddWorkoutParams {
+            exercise_identifier: "Multi Set",
+            date,
+            sets: Some(1),
+            reps: Some(reps),
+            weight: Some(50.0),
+            duration: None,
+            distance: None,
+            notes: None,
+            implicit_type: None,
+            implicit_muscles: None,
+            bodyweight_to_use: None,
+        })?;
+        Ok(())
+    };
+
+    let day1 = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+    let day2 = NaiveDate::from_ymd_opt(2024, 1, 3).unwrap();
+
+    // Three sets logged on the same day should count as a single workout.
+    add(&mut service, day1, 8, 10)?;
+    add(&mut service, day1, 9, 10)?;
+    add(&mut service, day1, 10, 10)?;
+    // Two sets logged on another day should count as a second workout.
+    add(&mut service, day2, 8, 10)?;
+    add(&mut service, day2, 9, 10)?;
+
+    let stats = service.get_exercise_stats("Multi Set")?;
+
+    assert_eq!(stats.total_workouts, 2, "one day should count as one workout");
+    assert_eq!(stats.first_workout_date, Some(day1));
+    assert_eq!(stats.last_workout_date, Some(day2));
+    // Gap between 2024-01-01 and 2024-01-03 is one rest day.
+    assert_eq!(stats.longest_gap_days, Some(1));
+
+    Ok(())
+}
+
+#[test]
 fn test_get_latest_bodyweight() -> Result<()> {
     let service = create_test_service()?;
 
